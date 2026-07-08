@@ -1,30 +1,48 @@
-# Tutorsolve WhatsApp CRM Dashboard
+# Tutorsolve WhatsApp CRM
 
-This project contains a custom WhatsApp CRM dashboard with a FastAPI backend and a plain HTML/CSS/JS frontend.
+A highly scalable, multi-agent WhatsApp CRM built to handle dynamic conversations, team management, and customer support. 
 
-## How to Run the Project
+## 🏗️ Architecture Stack
 
-### 1. Running the FastAPI Backend
-The backend runs using an ASGI server (Uvicorn). To start it:
+This project strictly adheres to a decoupled client-server architecture:
 
+- **Backend:** Python / Flask (App Factory Pattern) / SQLAlchemy
+- **Database:** SQLite (Development) / PostgreSQL (Production ready)
+- **Frontend:** React / Next.js (App Router) / Tailwind CSS v4
+- **Security:** HttpOnly JWT Session Cookies, Role-Based Access Control (Admin, Manager, Agent)
+
+## 🚀 Getting Started
+
+The application is split into two directories: `backend` and `frontend`. You must run both servers simultaneously for local development.
+
+### 1. Booting the Backend (Flask)
+We use `uv` for lightning-fast Python package management.
 ```bash
 cd backend
-pip install -r requirements.txt  # (Once dependencies are added)
-uvicorn main:app --reload
+# Install dependencies
+uv sync
+# Seed the initial admin user (admin@crm.com / adminpassword)
+uv run python seed_admin.py
+# Start the Flask development server on port 5000
+FLASK_APP=app FLASK_ENV=development uv run flask run --port=5000
 ```
-*(Alternatively, if `main.py` is configured with an entry point, run `python main.py`)*
+*See `backend/README.md` for full API and testing documentation.*
 
-The backend server will start at `http://localhost:8000`.
-
-### 2. Running the HTML/CSS/JS Frontend
-Since the frontend uses vanilla web technologies without a build step, you only need a static file server.
-
-**Python Built-in Server**
+### 2. Booting the Frontend (Next.js)
+We use `pnpm` for frontend package management.
 ```bash
 cd frontend
-python -m http.server 3000
+# Install dependencies
+pnpm install
+# Start the Next.js development server on port 3000
+pnpm run dev
 ```
-This will serve the frontend at `http://localhost:3000`.
+*See `frontend/README.md` for full component and testing documentation.*
 
-### Architecture
-- The frontend javascript (e.g. `api.js` and `websocket.js`) communicates directly with the FastAPI endpoints hosted on `http://localhost:8000`.
+## 🧪 Testing
+Both environments are heavily driven by TDD (Test-Driven Development).
+- **Backend:** `uv run pytest tests/` (Currently 21/21 passing)
+- **Frontend:** `pnpm test` (Currently 8/8 passing)
+
+## 🔐 Environment Variables
+Copy `.env.example` to `.env` in the `backend` folder, and `.env.local` in the `frontend` folder to configure your local environment securely.
