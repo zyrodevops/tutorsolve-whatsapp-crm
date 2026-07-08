@@ -1,26 +1,59 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme inline {
+  /* Semantic Backgrounds */
+  --color-bg-base: #f8fafc; /* slate-50 */
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #ffffff;
+
+  /* Semantic Text */
+  --color-text-primary: #0f172a; /* slate-900 */
+  --color-text-secondary: #475569; /* slate-600 */
+  --color-text-muted: #94a3b8; /* slate-400 */
+
+  /* Aesthetic Green Brand (WhatsApp Inspired but modern) */
+  --color-brand-primary: #10b981; /* emerald-500 */
+  --color-brand-hover: #059669; /* emerald-600 */
+  --color-brand-active: #047857; /* emerald-700 */
+
+  /* Status Colors */
+  --color-status-success: #10b981;
+  --color-status-error: #ef4444; /* red-500 */
+  --color-status-warning: #f59e0b; /* amber-500 */
+
+  /* Borders */
+  --color-border-subtle: #e2e8f0; /* slate-200 */
+  --color-border-focus: #10b981;
+
+  /* Fonts injected by next/font */
+  --font-sans: var(--font-inter);
+  --font-heading: var(--font-outfit);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+:root {
+  /* We define the variables here so Tailwind can pick them up */
+  background-color: var(--color-bg-base);
+  color: var(--color-text-primary);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --color-bg-base: #0f172a; /* slate-900 */
+    --color-bg-surface: #1e293b; /* slate-800 */
+    --color-bg-elevated: #334155; /* slate-700 */
+
+    --color-text-primary: #f1f5f9; /* slate-100 */
+    --color-text-secondary: #94a3b8; /* slate-400 */
+    --color-text-muted: #64748b; /* slate-500 */
+
+    --color-border-subtle: #334155; /* slate-700 */
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
 }
