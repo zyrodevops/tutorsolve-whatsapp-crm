@@ -130,6 +130,73 @@ def test_create_user_forged_cookie(client):
     assert response.status_code == 401
     assert response.json["message"] == "Invalid token"
 
+def test_delete_user_success(client, admin_token, app):
+    # First create a user to delete
+    with app.app_context():
+        from app.models.user import User
+        from app.db.database import db
+        user = User(
+            full_name="To Delete",
+            email="delete@example.com",
+            password_hash="hash",
+            role="AGENT"
+        )
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.id
+
+    client.set_cookie("access_token", admin_token)
+    response = client.delete(f"/api/users/{user_id}")
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "success"
+
+def test_delete_user_not_found(client, admin_token):
+    client.set_cookie("access_token", admin_token)
+    response = client.delete("/api/users/non-existent-id")
+    assert response.status_code == 404
+    assert response.get_json()["status"] == "error"
+
+def test_delete_user_with_assigned_conversation_is_refused(client, admin_token, app):
+    with app.app_context():
+        from app.models.user import User
+        from app.models.customer import Customer
+        from app.models.conversation import Conversation
+        from app.db.database import db
+
+        agent = User(
+            full_name="Busy Agent",
+            email="busy-agent@example.com",
+            password_hash="hash",
+            role="AGENT"
+        )
+        db.session.add(agent)
+        db.session.commit()
+
+        customer = Customer(real_phone_number_encrypted="15550001111", masked_id="Lead-test")
+        db.session.add(customer)
+        db.session.flush()
+        db.session.add(Conversation(customer_id=customer.id, assigned_agent_id=agent.id))
+        db.session.commit()
+        agent_id = agent.id
+
+    client.set_cookie("access_token", admin_token)
+    response = client.delete(f"/api/users/{agent_id}")
+    assert response.status_code == 409
+    assert response.get_json()["status"] == "error"
+
+def test_delete_self(client, admin_token, app):
+    # Find the admin user ID that corresponds to the token
+    with app.app_context():
+        from app.models.user import User
+        from app.db.database import db
+        admin_user = db.session.scalar(db.select(User).filter_by(email="admin@test.com"))
+        admin_id = admin_user.id
+
+    client.set_cookie("access_token", admin_token)
+    response = client.delete(f"/api/users/{admin_id}")
+    assert response.status_code == 400
+    assert response.get_json()["message"] == "You cannot delete your own account"
+
 def test_admin_gets_users(client, admin_token, app):
     from app.models.user import User
     from app.db.database import db

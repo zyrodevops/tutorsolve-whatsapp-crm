@@ -87,7 +87,7 @@ describe('Admin Team Management Page', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create User/i }));
 
     await waitFor(() => {
-      expect(screen.getByText('Email already exists')).toBeInTheDocument();
+      expect(screen.getAllByText('Email already exists')[0]).toBeInTheDocument();
     });
     
     // Modal remains open on error

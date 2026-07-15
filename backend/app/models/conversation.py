@@ -2,13 +2,24 @@ from datetime import datetime, timezone
 import uuid
 from app.db.database import db
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, DateTime, Integer, ForeignKey
+from sqlalchemy import String, DateTime, Integer, ForeignKey, Index, text
 
 def generate_uuid():
     return str(uuid.uuid4())
 
 class Conversation(db.Model):
     __tablename__ = "conversations"
+    __table_args__ = (
+        # At most one OPEN/PENDING conversation per customer, enforced at the DB level
+        # so two concurrent webhook deliveries can't both create one (see whatsapp_service.py).
+        Index(
+            "ix_one_active_conversation_per_customer",
+            "customer_id",
+            unique=True,
+            sqlite_where=text("status IN ('OPEN', 'PENDING')"),
+            postgresql_where=text("status IN ('OPEN', 'PENDING')"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=generate_uuid)
     customer_id: Mapped[str] = mapped_column(ForeignKey("customers.id"), nullable=False)

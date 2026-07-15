@@ -35,12 +35,14 @@ This is the backend API for the Tutorsolve WhatsApp CRM. It is built using **Fla
 This project rigorously follows Test-Driven Development (TDD). We use `pytest` for all unit and integration testing.
 
 ```bash
-PYTHONPATH=. uv run pytest tests/
+uv run python -m pytest
 ```
+Use `python -m pytest`, not a bare `uv run pytest` — the latter fails with `ModuleNotFoundError: No module named 'app'` since there's no src-layout/path config, and only `python -m` puts the cwd on `sys.path`.
 
 ## 📁 Architecture
 - `app/api/`: Flask Blueprints defining the REST endpoints.
 - `app/core/`: Security logic (JWT token generation, Password Hashing, Middlewares).
 - `app/models/`: SQLAlchemy Database schemas.
 - `app/schemas/`: Marshmallow validation schemas for incoming request payloads.
-- `app/services/`: Isolated business logic layers (e.g. `user_service`, `auth_service`).
+- `app/services/`: Isolated business logic layers (e.g. `user_service`, `auth_service`, `whatsapp_service`).
+- `app/websockets/`: Flask-SocketIO connection handling for real-time inbox updates.

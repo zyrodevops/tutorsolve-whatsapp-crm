@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, X } from 'lucide-react';
+import { Users, Plus, X, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
 import { Button } from '@/components/ui/Button';
@@ -14,6 +14,7 @@ interface User {
   role: string;
   system_status: string;
   created_at: string;
+  is_current_user: boolean;
 }
 
 export default function TeamManagementPage() {
@@ -23,7 +24,6 @@ export default function TeamManagementPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [fetchError, setFetchError] = useState('');
 
   const [formData, setFormData] = useState({
     full_name: '',
@@ -48,13 +48,13 @@ export default function TeamManagementPage() {
       const payload = await res.json();
       if (res.ok) {
         setUsers(payload.data);
-        setFetchError('');
+        setError('');
       } else {
-        setFetchError(payload.message || 'Failed to load team members.');
+        setError(payload.message || 'Failed to load team members.');
       }
     } catch (err) {
       console.error('Failed to fetch users', err);
-      setFetchError('Failed to load team members.');
+      setError('Failed to load team members.');
     } finally {
       setIsFetchingUsers(false);
     }
@@ -116,6 +116,28 @@ export default function TeamManagementPage() {
     }
   };
 
+  const handleDeleteUser = async (userId: string) => {
+    if (!confirm('Are you sure you want to delete this user?')) return;
+    
+    try {
+      const response = await fetch(`${API_URL}/api/users/${userId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+      
+      if (response.ok) {
+        setSuccess('User deleted successfully');
+        fetchUsers();
+      } else {
+        const payload = await response.json();
+        setError(payload.message || 'Failed to delete user');
+      }
+    } catch (err) {
+      console.error('Failed to delete user', err);
+      setError('An unexpected error occurred while deleting user');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[var(--color-bg-base)] p-8">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -143,19 +165,26 @@ export default function TeamManagementPage() {
         </div>
 
         {success && (
-          <div className="p-4 text-sm text-[var(--color-status-success)] bg-emerald-50 border border-emerald-200 rounded-md">
+          <div className="p-4 bg-green-50 border border-green-200 text-[var(--color-status-success)] rounded-md">
             {success}
           </div>
         )}
 
-        {fetchError && (
-          <div className="p-4 text-sm text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-md">
-            {fetchError}
+        {error && (
+          <div className="p-4 bg-red-50 border border-red-200 text-[var(--color-status-error)] rounded-md">
+            {error}
           </div>
         )}
 
-        {/* User Table Section */}
-        <div className="bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded-xl shadow-sm overflow-hidden">
+        {/* Table Section */}
+        <div className="bg-[var(--color-bg-surface)] rounded-xl border border-[var(--color-border-subtle)] overflow-hidden">
+          <div className="p-6 border-b border-[var(--color-border-subtle)] bg-gray-50 flex items-center space-x-3">
+            <Users className="w-5 h-5 text-[var(--color-text-secondary)]" />
+            <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">
+              Active Employees
+            </h2>
+          </div>
+          
           {isFetchingUsers ? (
             <div className="p-16 flex justify-center">
               <p className="text-[var(--color-text-secondary)]">Loading team...</p>
@@ -179,6 +208,7 @@ export default function TeamManagementPage() {
                     <th className="px-6 py-4 font-medium">Email</th>
                     <th className="px-6 py-4 font-medium">Role</th>
                     <th className="px-6 py-4 font-medium">Status</th>
+                    <th className="px-6 py-4 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[var(--color-border-subtle)]">
@@ -201,6 +231,21 @@ export default function TeamManagementPage() {
                         }`}>
                           {user.system_status}
                         </span>
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        {user.is_current_user ? (
+                          <span className="text-xs font-medium text-[var(--color-text-muted)] mr-2">
+                            (You)
+                          </span>
+                        ) : (
+                          <button 
+                            onClick={() => handleDeleteUser(user.id)}
+                            className="text-gray-400 hover:text-red-600 transition-colors"
+                            title="Delete User"
+                          >
+                            <Trash2 className="w-4 h-4 inline-block" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

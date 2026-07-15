@@ -23,9 +23,13 @@ def create_app(test_config=None):
     db.init_app(app)
 
     # Register blueprints
-    from app.api import auth, users
-    app.register_blueprint(auth.bp)
-    app.register_blueprint(users.bp)
+    from app.api.auth import bp as auth_bp
+    from app.api.users import bp as users_bp
+    from app.api.whatsapp import bp as whatsapp_bp
+    
+    app.register_blueprint(auth_bp)
+    app.register_blueprint(users_bp)
+    app.register_blueprint(whatsapp_bp)
 
     # ensure the instance folder exists
     try:

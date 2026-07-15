@@ -32,23 +32,24 @@
 
 :root {
   /* We define the variables here so Tailwind can pick them up */
+  color-scheme: light; /* Force the browser to render standard elements in light mode */
   background-color: var(--color-bg-base);
   color: var(--color-text-primary);
 }
 
-@media (prefers-color-scheme: dark) {
+/* @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg-base: #0f172a; /* slate-900 */
-    --color-bg-surface: #1e293b; /* slate-800 */
-    --color-bg-elevated: #334155; /* slate-700 */
+    --color-bg-base: #0f172a; 
+    --color-bg-surface: #1e293b; 
+    --color-bg-elevated: #334155; 
 
-    --color-text-primary: #f1f5f9; /* slate-100 */
-    --color-text-secondary: #94a3b8; /* slate-400 */
-    --color-text-muted: #64748b; /* slate-500 */
+    --color-text-primary: #f1f5f9; 
+    --color-text-secondary: #94a3b8; 
+    --color-text-muted: #64748b; 
 
-    --color-border-subtle: #334155; /* slate-700 */
+    --color-border-subtle: #334155; 
   }
-}
+} */
 
 body {
   font-family: var(--font-sans);

@@ -41,8 +41,30 @@ pnpm run dev
 
 ## 🧪 Testing
 Both environments are heavily driven by TDD (Test-Driven Development).
-- **Backend:** `uv run pytest tests/` (Currently 21/21 passing)
-- **Frontend:** `pnpm test` (Currently 8/8 passing)
+- **Backend:** `uv run python -m pytest` (Currently 45/45 passing)
+- **Frontend:** `pnpm test` (Currently 10/10 passing)
 
 ## 🔐 Environment Variables
-Copy `.env.example` to `.env` in the `backend` folder, and `.env.local` in the `frontend` folder to configure your local environment securely.
+Copy `.env.example` to `.env` in the `backend` folder, and `.env.example` to `.env.local` in the `frontend` folder to configure your local environment securely. Never commit `.env`/`.env.local` or hardcode these values.
+
+**Backend (`backend/.env`):**
+
+| Variable | Purpose |
+|---|---|
+| `FRONTEND_URL` | Next.js origin allowed by CORS |
+| `SECRET_KEY` | Signs JWT access tokens — must be a real secret outside local dev |
+| `SESSION_COOKIE_SECURE` | Set `True` in production so the auth cookie is HTTPS-only |
+| `DATABASE_URL` | SQLAlchemy connection string (defaults to a local SQLite file if unset) |
+| `SENDGRID_API_KEY` | SendGrid key for onboarding emails; leave blank to mock sending locally |
+| `SENDGRID_FROM_EMAIL` | From-address for onboarding emails |
+| `WHATSAPP_VERIFY_TOKEN` | Shared secret you choose and register in the Meta App Dashboard's webhook config; Meta echoes it back on the verification handshake |
+| `WHATSAPP_ACCESS_TOKEN` | Meta WhatsApp Cloud API access token (Meta App Dashboard > WhatsApp > API Setup) |
+| `WHATSAPP_PHONE_NUMBER_ID` | Meta-assigned phone number ID used to send outbound messages |
+
+**Frontend (`frontend/.env.local`):**
+
+| Variable | Purpose |
+|---|---|
+| `NEXT_PUBLIC_API_URL` | Base URL of the Flask backend |
+
+See `backend/.env.example` and `frontend/.env.example` for the full set of defaults.
