@@ -25,7 +25,9 @@ def test_process_incoming_new_customer(app, mocker):
 
         customer = Customer.query.first()
         assert customer is not None
-        assert customer.real_phone_number_encrypted == "16505551111" # We will encrypt this later in Week 2
+        assert customer.real_phone_number_encrypted != "16505551111" # Should be encrypted
+        assert customer.phone_hash is not None # Should be hashed
+        assert len(customer.phone_hash) == 64
         assert customer.whatsapp_name == "John Doe"
 
         conversation = Conversation.query.first()
@@ -78,26 +80,32 @@ def test_send_message_success(app, mocker, monkeypatch):
     mock_post.return_value.json.return_value = {"messages": [{"id": "wamid.success"}]}
 
     with app.app_context():
+        from app.core.security import encrypt_phone, hash_phone
         # Setup a customer to reply to
         Customer.query.delete()
         db.session.commit()
-        customer = Customer(real_phone_number_encrypted="1234567890", masked_id="L-1")
+        customer = Customer(
+            phone_hash=hash_phone("1234567890"),
+            real_phone_number_encrypted=encrypt_phone("1234567890"), 
+            masked_id="L-1"
+        )
         db.session.add(customer)
         db.session.flush()
         conversation = Conversation(customer_id=customer.id)
         db.session.add(conversation)
         db.session.commit()
+        conversation_id = conversation.id
 
         # Send
         success, error = WhatsAppService.send_message(
             conversation_id=conversation.id,
-            to_phone="1234567890",
-            text="Reply from agent"
+            text="Reply from agent",
+            sender_id="agent-1"
         )
-        
+
         assert success is True
         assert error is None
-        
+
         # Verify the HTTP call
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
@@ -111,6 +119,56 @@ def test_send_message_success(app, mocker, monkeypatch):
         assert outbound is not None
         assert outbound.text_body == "Reply from agent"
         assert outbound.delivery_status == "SENT"
+        assert outbound.sender_id == "agent-1"
+
+        # Verify the conversation's inbox preview reflects the agent's reply
+        db.session.refresh(conversation)
+        assert conversation.last_message_preview == "Reply from agent"
+        assert conversation.last_message_at is not None
+
+def test_send_message_broadcasts_over_websocket(app, mocker, monkeypatch):
+    """
+    Test that a successful outbound send emits a 'new_message' socket event so
+    other active agents' views of the conversation update in real time.
+    """
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_ACCESS_TOKEN", "fake_token")
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_PHONE_NUMBER_ID", "12345")
+
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.return_value = {"messages": [{"id": "wamid.broadcast"}]}
+
+    mock_emit = mocker.patch("app.core.socket_events.socketio.emit")
+
+    with app.app_context():
+        from app.core.security import encrypt_phone, hash_phone
+        Customer.query.delete()
+        db.session.commit()
+        customer = Customer(
+            phone_hash=hash_phone("1231231234"),
+            real_phone_number_encrypted=encrypt_phone("1231231234"),
+            masked_id="L-broadcast"
+        )
+        db.session.add(customer)
+        db.session.flush()
+        conversation = Conversation(customer_id=customer.id)
+        db.session.add(conversation)
+        db.session.commit()
+
+        success, error = WhatsAppService.send_message(
+            conversation_id=conversation.id,
+            text="Broadcast me",
+            sender_id="agent-2"
+        )
+
+        assert success is True
+        mock_emit.assert_called_once()
+        event_name, payload = mock_emit.call_args[0]
+        assert event_name == "new_message"
+        assert payload["conversation_id"] == conversation.id
+        assert payload["message"]["direction"] == "OUTBOUND"
+        assert payload["message"]["sender_type"] == "AGENT"
+        assert payload["message"]["text_body"] == "Broadcast me"
 
 def test_send_message_failure(app, mocker, monkeypatch):
     """
@@ -129,10 +187,15 @@ def test_send_message_failure(app, mocker, monkeypatch):
     mock_post.side_effect = HTTPError("Bad Request", response=err_response)
 
     with app.app_context():
+        from app.core.security import encrypt_phone, hash_phone
         # Setup dummy
         Customer.query.delete()
         db.session.commit()
-        c = Customer(real_phone_number_encrypted="999", masked_id="L-9")
+        c = Customer(
+            phone_hash=hash_phone("999"),
+            real_phone_number_encrypted=encrypt_phone("999"), 
+            masked_id="L-9"
+        )
         db.session.add(c)
         db.session.flush()
         
@@ -142,7 +205,6 @@ def test_send_message_failure(app, mocker, monkeypatch):
         
         success, error = WhatsAppService.send_message(
             conversation_id=conv.id,
-            to_phone="999",
             text="Will fail"
         )
         
@@ -154,11 +216,16 @@ def test_process_incoming_pending_to_open_transition(app, mocker):
     Test that if a conversation is PENDING, receiving a customer message transitions it to OPEN.
     """
     with app.app_context():
+        from app.core.security import encrypt_phone, hash_phone
         Customer.query.delete()
         Conversation.query.delete()
         db.session.commit()
         
-        c = Customer(real_phone_number_encrypted="111", masked_id="L-11")
+        c = Customer(
+            phone_hash=hash_phone("111"),
+            real_phone_number_encrypted=encrypt_phone("111"), 
+            masked_id="L-11"
+        )
         db.session.add(c)
         db.session.flush()
         
@@ -225,7 +292,12 @@ def test_process_incoming_message_conversation_race_is_guarded_at_db_level(app, 
         Customer.query.delete()
         db.session.commit()
 
-        customer = Customer(real_phone_number_encrypted="16505553333", masked_id="Lead-race")
+        from app.core.security import encrypt_phone, hash_phone
+        customer = Customer(
+            phone_hash=hash_phone("16505553333"),
+            real_phone_number_encrypted=encrypt_phone("16505553333"), 
+            masked_id="Lead-race"
+        )
         db.session.add(customer)
         db.session.flush()
         db.session.add(Conversation(customer_id=customer.id, status="OPEN"))
@@ -257,3 +329,9 @@ def test_process_incoming_updates_24h_window(app, mocker):
         # Should be roughly 24 hours apart
         diff = conv.whatsapp_window_expires_at - conv.last_customer_message_at
         assert diff == timedelta(hours=24)
+
+def test_process_incoming_message_rejects_empty_phone(app, mocker):
+    with app.app_context():
+        import pytest
+        with pytest.raises(ValueError, match="Phone number is required"):
+            WhatsAppService.process_incoming_message(phone="", name="Ghost", text="Boo")

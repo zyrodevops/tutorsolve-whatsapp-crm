@@ -5,6 +5,7 @@ import TeamManagementPage from '@/app/admin/team/page'
 
 jest.mock('next/navigation', () => ({
   useRouter: jest.fn(),
+  usePathname: () => '/admin/team',
 }))
 
 const mockUsers = [
@@ -12,19 +13,24 @@ const mockUsers = [
   { id: '2', full_name: 'Agent Bob', email: 'bob@test.com', role: 'AGENT', system_status: 'INACTIVE' }
 ];
 
+const mockCurrentUser = { id: '1', email: 'admin@test.com', full_name: 'Admin User', role: 'ADMIN' };
+
 describe('Admin Team Management Page', () => {
   const mockPush = jest.fn();
 
   beforeEach(() => {
     (useRouter as jest.Mock).mockReturnValue({ push: mockPush });
-    global.fetch = jest.fn().mockImplementation((url, options) => {
+    global.fetch = jest.fn().mockImplementation((url: string, options) => {
+      if (url.includes('/api/auth/me')) {
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'success', data: mockCurrentUser }) });
+      }
       if (options?.method === 'POST') {
         return Promise.resolve({
           ok: true,
           json: async () => ({ status: 'success' })
         });
       }
-      // Default to GET
+      // Default to GET /api/users
       return Promise.resolve({
         ok: true,
         json: async () => ({ status: 'success', data: mockUsers })
@@ -65,7 +71,10 @@ describe('Admin Team Management Page', () => {
   })
 
   it('shows error on failed user creation', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url, options) => {
+    (global.fetch as jest.Mock).mockImplementation((url: string, options) => {
+      if (url.includes('/api/auth/me')) {
+        return Promise.resolve({ ok: true, json: async () => ({ status: 'success', data: mockCurrentUser }) });
+      }
       if (options?.method === 'POST') {
         return Promise.resolve({
           ok: false,

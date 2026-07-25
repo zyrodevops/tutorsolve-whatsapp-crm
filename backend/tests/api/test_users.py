@@ -172,7 +172,12 @@ def test_delete_user_with_assigned_conversation_is_refused(client, admin_token, 
         db.session.add(agent)
         db.session.commit()
 
-        customer = Customer(real_phone_number_encrypted="15550001111", masked_id="Lead-test")
+        from app.core.security import encrypt_phone, hash_phone
+        customer = Customer(
+            phone_hash=hash_phone("15550001111"),
+            real_phone_number_encrypted=encrypt_phone("15550001111"), 
+            masked_id="Lead-test"
+        )
         db.session.add(customer)
         db.session.flush()
         db.session.add(Conversation(customer_id=customer.id, assigned_agent_id=agent.id))

@@ -26,8 +26,8 @@
   --color-border-focus: #10b981;
 
   /* Fonts injected by next/font */
-  --font-sans: var(--font-inter);
-  --font-heading: var(--font-outfit);
+  --font-sans: var(--font-plus-jakarta);
+  --font-heading: var(--font-plus-jakarta);
 }
 
 :root {
