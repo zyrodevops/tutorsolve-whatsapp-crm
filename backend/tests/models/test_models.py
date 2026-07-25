@@ -40,8 +40,10 @@ def test_user_unique_email(app):
         db.session.commit()
 
 def test_customer_model(app):
+    from app.core.security import encrypt_phone, hash_phone
     customer = Customer(
-        real_phone_number_encrypted="ENCRYPTED_12345",
+        phone_hash=hash_phone("12345"),
+        real_phone_number_encrypted=encrypt_phone("12345"),
         masked_id="Lead 001",
         whatsapp_name="John"
     )
@@ -56,8 +58,10 @@ from app.models.conversation import Conversation
 from app.models.message import Message
 
 def test_conversation_and_message_models(app):
+    from app.core.security import encrypt_phone, hash_phone
     customer = Customer(
-        real_phone_number_encrypted="ENC_123",
+        phone_hash=hash_phone("123"),
+        real_phone_number_encrypted=encrypt_phone("123"),
         masked_id="Lead 002"
     )
     db.session.add(customer)

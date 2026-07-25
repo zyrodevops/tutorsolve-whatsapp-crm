@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import AppShell from '@/components/layout/AppShell';
+import type { CurrentUser } from '@/types/auth';
 
 interface User {
   id: string;
@@ -17,12 +19,13 @@ interface User {
   is_current_user: boolean;
 }
 
-export default function TeamManagementPage() {
+function TeamManagementContent() {
   const [users, setUsers] = useState<User[]>([]);
   const [isFetchingUsers, setIsFetchingUsers] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [formError, setFormError] = useState('');
   const [success, setSuccess] = useState('');
 
   const [formData, setFormData] = useState({
@@ -67,7 +70,7 @@ export default function TeamManagementPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setError('');
+    setFormError('');
     setSuccess('');
 
     try {
@@ -83,48 +86,47 @@ export default function TeamManagementPage() {
       const responsePayload = await response.json();
 
       if (!response.ok) {
-        throw new Error(responsePayload.message || 'Failed to create user');
+        let errorMsg = responsePayload.message || 'Failed to create user';
+        if (responsePayload.errors && typeof responsePayload.errors === 'object') {
+          const detailedErrors = Object.entries(responsePayload.errors)
+            .map(([field, messages]) => `${field.replace('_', ' ')}: ${(messages as string[]).join(', ')}`)
+            .join(' | ');
+          errorMsg = `${errorMsg} - ${detailedErrors}`;
+        }
+        throw new Error(errorMsg);
       }
 
       setSuccess(`User ${formData.full_name} created successfully! An email has been sent.`);
       setIsModalOpen(false);
       setFormData({ full_name: '', email: '', password: '', role: 'AGENT' });
-      
+
       // Refresh the table
       fetchUsers();
-      
+
     } catch (err: unknown) {
       if (err instanceof Error) {
-        setError(err.message);
+        setFormError(err.message);
       } else {
-        setError('An unexpected error occurred while creating user');
+        setFormError('An unexpected error occurred while creating user');
       }
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await fetch(`${API_URL}/api/auth/logout`, { 
-        method: 'POST',
-        credentials: 'include' 
-      });
-      router.push('/login');
-    } catch (err) {
-      console.error('Logout failed', err);
-    }
-  };
+  const [pendingDeleteUser, setPendingDeleteUser] = useState<User | null>(null);
 
-  const handleDeleteUser = async (userId: string) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
-    
+  const handleDeleteUser = async () => {
+    if (!pendingDeleteUser) return;
+    const userId = pendingDeleteUser.id;
+    setPendingDeleteUser(null);
+
     try {
       const response = await fetch(`${API_URL}/api/users/${userId}`, {
         method: 'DELETE',
         credentials: 'include'
       });
-      
+
       if (response.ok) {
         setSuccess('User deleted successfully');
         fetchUsers();
@@ -138,10 +140,16 @@ export default function TeamManagementPage() {
     }
   };
 
+  const roleBadgeStyles: Record<string, string> = {
+    ADMIN: 'bg-purple-50 text-purple-700',
+    MANAGER: 'bg-blue-50 text-blue-700',
+    AGENT: 'bg-emerald-50 text-emerald-700',
+  };
+
   return (
-    <div className="min-h-screen bg-[var(--color-bg-base)] p-8">
+    <div className="h-full overflow-y-auto p-8">
       <div className="max-w-6xl mx-auto space-y-6">
-        
+
         {/* Header Section */}
         <div className="flex items-center justify-between">
           <div>
@@ -152,16 +160,14 @@ export default function TeamManagementPage() {
               Manage your CRM agents and their permissions.
             </p>
           </div>
-          
-          <div className="flex space-x-3">
-            <Button variant="ghost" className="text-[var(--color-status-error)] hover:text-red-700 hover:bg-red-50" onClick={handleLogout}>
-              Logout
-            </Button>
-            <Button className="flex items-center" onClick={() => setIsModalOpen(true)}>
-              <Plus className="w-4 h-4 mr-2" />
-              Add Employee
-            </Button>
-          </div>
+
+          <Button className="flex items-center" onClick={() => {
+            setFormError('');
+            setIsModalOpen(true);
+          }}>
+            <Plus className="w-4 h-4 mr-2" />
+            Add Employee
+          </Button>
         </div>
 
         {success && (
@@ -184,7 +190,7 @@ export default function TeamManagementPage() {
               Active Employees
             </h2>
           </div>
-          
+
           {isFetchingUsers ? (
             <div className="p-16 flex justify-center">
               <p className="text-[var(--color-text-secondary)]">Loading team...</p>
@@ -219,14 +225,14 @@ export default function TeamManagementPage() {
                       </td>
                       <td className="px-6 py-4">{user.email}</td>
                       <td className="px-6 py-4">
-                        <span className="px-2 py-1 bg-emerald-50 text-emerald-700 rounded-md text-xs font-medium">
+                        <span className={`px-2 py-1 rounded-md text-xs font-medium ${roleBadgeStyles[user.role] ?? 'bg-gray-50 text-gray-700'}`}>
                           {user.role}
                         </span>
                       </td>
                       <td className="px-6 py-4">
                         <span className={`px-2 py-1 rounded-md text-xs font-medium ${
-                          user.system_status === 'ACTIVE' 
-                            ? 'bg-blue-50 text-blue-700' 
+                          user.system_status === 'ACTIVE'
+                            ? 'bg-emerald-50 text-emerald-700'
                             : 'bg-red-50 text-red-700'
                         }`}>
                           {user.system_status}
@@ -238,8 +244,8 @@ export default function TeamManagementPage() {
                             (You)
                           </span>
                         ) : (
-                          <button 
-                            onClick={() => handleDeleteUser(user.id)}
+                          <button
+                            onClick={() => setPendingDeleteUser(user)}
                             className="text-gray-400 hover:text-red-600 transition-colors"
                             title="Delete User"
                           >
@@ -259,43 +265,43 @@ export default function TeamManagementPage() {
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
             <div className="bg-[var(--color-bg-surface)] w-full max-w-md rounded-xl shadow-lg p-6 relative">
-              <button 
+              <button
                 onClick={() => setIsModalOpen(false)}
                 className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
               >
                 <X className="w-5 h-5" />
               </button>
-              
+
               <h2 className="text-xl font-bold text-[var(--color-text-primary)] mb-6">Create New User</h2>
-              
+
               <form onSubmit={handleSubmit} className="space-y-4">
-                <Input 
+                <Input
                   id="full_name"
-                  label="Full Name" 
-                  required 
+                  label="Full Name"
+                  required
                   value={formData.full_name}
                   onChange={(e) => setFormData({...formData, full_name: e.target.value})}
                 />
-                <Input 
+                <Input
                   id="email"
-                  type="email" 
-                  label="Email Address" 
-                  required 
+                  type="email"
+                  label="Email Address"
+                  required
                   value={formData.email}
                   onChange={(e) => setFormData({...formData, email: e.target.value})}
                 />
-                <Input 
+                <Input
                   id="password"
-                  type="password" 
-                  label="Temporary Password" 
-                  required 
+                  type="password"
+                  label="Temporary Password"
+                  required
                   value={formData.password}
                   onChange={(e) => setFormData({...formData, password: e.target.value})}
                 />
-                
+
                 <div className="flex flex-col w-full">
                   <label className="mb-1 text-sm font-medium text-[var(--color-text-primary)]">Role</label>
-                  <select 
+                  <select
                     className="px-3 py-2 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded-md text-sm focus:ring-[var(--color-border-focus)] focus:border-transparent outline-none"
                     value={formData.role}
                     onChange={(e) => setFormData({...formData, role: e.target.value})}
@@ -306,9 +312,9 @@ export default function TeamManagementPage() {
                   </select>
                 </div>
 
-                {error && (
+                {formError && (
                   <div className="p-3 text-sm text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-md">
-                    {error}
+                    {formError}
                   </div>
                 )}
 
@@ -321,7 +327,41 @@ export default function TeamManagementPage() {
           </div>
         )}
 
+        {/* Delete Confirmation Modal */}
+        {pendingDeleteUser && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-[var(--color-bg-surface)] w-full max-w-sm rounded-xl shadow-lg p-6">
+              <h2 className="text-lg font-bold text-[var(--color-text-primary)] mb-2">Remove team member?</h2>
+              <p className="text-sm text-[var(--color-text-secondary)] mb-6">
+                <span className="font-medium text-[var(--color-text-primary)]">{pendingDeleteUser.full_name}</span> will lose access immediately. This can&apos;t be undone.
+              </p>
+              <div className="flex justify-end space-x-3">
+                <Button type="button" variant="ghost" onClick={() => setPendingDeleteUser(null)}>Cancel</Button>
+                <Button type="button" variant="danger" onClick={handleDeleteUser}>
+                  Remove
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
+  );
+}
+
+function NotAuthorized() {
+  return (
+    <div className="h-full flex items-center justify-center">
+      <p className="text-[var(--color-text-secondary)]">You don&apos;t have access to this page.</p>
+    </div>
+  );
+}
+
+export default function TeamManagementPage() {
+  return (
+    <AppShell>
+      {(user: CurrentUser) => (user.role === 'ADMIN' ? <TeamManagementContent /> : <NotAuthorized />)}
+    </AppShell>
   );
 }

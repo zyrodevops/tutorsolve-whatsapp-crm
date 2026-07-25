@@ -1,12 +1,18 @@
-import '@testing-library/jest-dom'
-import { render, screen } from '@testing-library/react'
+import { render } from '@testing-library/react'
+import { redirect } from 'next/navigation'
 import Page from '@/app/page'
- 
+
+jest.mock('next/navigation', () => ({
+  redirect: jest.fn(),
+}))
+
 describe('Home Page', () => {
-  it('renders the CRM dashboard title', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('redirects to the login page', () => {
     render(<Page />)
- 
-    const heading = screen.getByRole('heading', { level: 1 })
-    expect(heading).toHaveTextContent('WhatsApp CRM Dashboard')
+    expect(redirect).toHaveBeenCalledWith('/login')
   })
 })

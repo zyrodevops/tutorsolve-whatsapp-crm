@@ -41,8 +41,8 @@ pnpm run dev
 
 ## 🧪 Testing
 Both environments are heavily driven by TDD (Test-Driven Development).
-- **Backend:** `uv run python -m pytest` (Currently 45/45 passing)
-- **Frontend:** `pnpm test` (Currently 10/10 passing)
+- **Backend:** `uv run python -m pytest` (Currently 66/66 passing)
+- **Frontend:** `pnpm test` (Currently 17/17 passing)
 
 ## 🔐 Environment Variables
 Copy `.env.example` to `.env` in the `backend` folder, and `.env.example` to `.env.local` in the `frontend` folder to configure your local environment securely. Never commit `.env`/`.env.local` or hardcode these values.
@@ -60,6 +60,7 @@ Copy `.env.example` to `.env` in the `backend` folder, and `.env.example` to `.e
 | `WHATSAPP_VERIFY_TOKEN` | Shared secret you choose and register in the Meta App Dashboard's webhook config; Meta echoes it back on the verification handshake |
 | `WHATSAPP_ACCESS_TOKEN` | Meta WhatsApp Cloud API access token (Meta App Dashboard > WhatsApp > API Setup) |
 | `WHATSAPP_PHONE_NUMBER_ID` | Meta-assigned phone number ID used to send outbound messages |
+| `ENCRYPTION_KEY` | Fernet key that AES-256-encrypts customer phone numbers at rest — the checked-in default is a known dev-only key and must be replaced with a real generated key (see `backend/.env.example`) outside local dev |
 
 **Frontend (`frontend/.env.local`):**
 

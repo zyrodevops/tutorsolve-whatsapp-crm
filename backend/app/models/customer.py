@@ -11,7 +11,8 @@ class Customer(db.Model):
     __tablename__ = "customers"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=generate_uuid)
-    real_phone_number_encrypted: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    phone_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    real_phone_number_encrypted: Mapped[str] = mapped_column(String, nullable=False)
     masked_id: Mapped[str] = mapped_column(String, nullable=False)
     whatsapp_name: Mapped[str] = mapped_column(String, nullable=True)
     profile_photo_url: Mapped[str] = mapped_column(String, nullable=True)
