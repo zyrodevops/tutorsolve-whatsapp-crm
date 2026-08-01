@@ -1,18 +1,25 @@
 from datetime import datetime, timezone
 import uuid
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, DateTime, ForeignKey
-from app.db.database import db
+from dataclasses import dataclass, field
+from typing import Optional
 
-class AuditLog(db.Model):
-    __tablename__ = 'audit_logs'
+@dataclass
+class AuditLog:
+    user_id: str
+    action: str
+    entity_type: str
+    entity_id: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    ip_address: Optional[str] = None
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey('users.id'), nullable=False)
-    action: Mapped[str] = mapped_column(String(100), nullable=False)
-    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    entity_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    ip_address: Mapped[str] = mapped_column(String(50), nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    user = relationship("User")
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "action": self.action,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "ip_address": self.ip_address,
+            "timestamp": self.timestamp
+        }

@@ -2,7 +2,8 @@
 
 import React, { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { MessageSquare } from 'lucide-react';
+import Link from 'next/link';
+import { MessageSquare, Eye, EyeOff } from 'lucide-react';
 import { API_URL } from '@/lib/config';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
@@ -12,6 +13,8 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
 
   const [error, setError] = useState('');
 
@@ -27,7 +30,7 @@ export default function LoginPage() {
           'Content-Type': 'application/json',
         },
         credentials: 'include', // Important to receive the HttpOnly cookie
-        body: JSON.stringify({ email, password })
+        body: JSON.stringify({ email, password, remember_me: rememberMe })
       });
 
       const responsePayload = await response.json();
@@ -56,7 +59,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--color-bg-base)] px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8 bg-[var(--color-bg-surface)] p-8 rounded-xl shadow-lg border border-[var(--color-border-subtle)]">
+      <div className="max-w-md w-full space-y-8 bg-[var(--color-bg-surface)] p-6 sm:p-8 rounded-xl shadow-lg border border-[var(--color-border-subtle)] mx-4">
         
         <div className="flex flex-col items-center">
           <div className="w-12 h-12 rounded-full bg-[var(--color-brand-primary)] flex items-center justify-center mb-4">
@@ -82,15 +85,31 @@ export default function LoginPage() {
               onChange={(e) => setEmail(e.target.value)}
             />
             
-            <Input
-              id="password"
-              type="password"
-              label="Password"
-              placeholder="••••••••"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label htmlFor="password" className="text-sm font-medium text-[var(--color-text-primary)]">Password</label>
+              </div>
+              <Input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                placeholder="••••••••"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                rightElement={
+                  <button 
+                    type="button" 
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="focus:outline-none hover:text-gray-800 transition-colors"
+                  >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  </button>
+                }
+              />
+              <div className="flex justify-end mt-2">
+                <Link href="/forgot-password" className="text-sm text-[var(--color-brand-primary)] hover:underline font-medium">Forgot password?</Link>
+              </div>
+            </div>
           </div>
 
           {error && (
@@ -99,21 +118,18 @@ export default function LoginPage() {
             </div>
           )}
 
-          <div className="flex items-center justify-between">
-            <div className="flex items-center">
-              <input
-                id="remember-me"
-                name="remember-me"
-                type="checkbox"
-                className="h-4 w-4 text-[var(--color-brand-primary)] focus:ring-[var(--color-brand-hover)] border-gray-300 rounded"
-              />
-              <label htmlFor="remember-me" className="ml-2 block text-sm text-[var(--color-text-secondary)]">
-                Remember me
-              </label>
-            </div>
+          <div className="flex items-center space-x-2">
+            <input 
+              type="checkbox" 
+              id="remember" 
+              className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+            />
+            <label htmlFor="remember" className="text-sm text-gray-500 font-medium">Remember me</label>
           </div>
 
-          <Button type="submit" className="w-full" isLoading={isLoading}>
+          <Button type="submit" className="w-full h-11" isLoading={isLoading}>
             Sign in
           </Button>
         </form>

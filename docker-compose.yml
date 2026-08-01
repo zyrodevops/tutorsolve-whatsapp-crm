@@ -1,0 +1,35 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "5000:5000"
+    env_file:
+      # Never baked into the image (see backend/.dockerignore) -- copy
+      # backend/.env.example to backend/.env and fill in real values first.
+      # FRONTEND_URL in that file must match wherever the frontend below is
+      # actually reachable from (default here: http://localhost:3000), since
+      # it's used for CORS.
+      - ./backend/.env
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Must be reachable from the *browser*, not from inside the frontend
+        # container -- so this is the published host port above, not the
+        # Docker-internal service name "backend".
+        NEXT_PUBLIC_API_URL: http://localhost:5000
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

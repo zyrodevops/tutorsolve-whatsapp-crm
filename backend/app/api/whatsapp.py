@@ -54,21 +54,34 @@ def webhook():
             if 'messages' in value and value['messages']:
                 message = value['messages'][0]
 
-                # Edge Case 2: Non-text message (image, audio, document)
-                if message['type'] != 'text':
-                    return jsonify({"status": "ignored", "reason": "unsupported_type"}), 200
+                msg_type = message['type']
+                
+                # Valid message types we support
+                supported_types = ['text', 'image', 'video', 'document', 'audio']
+                if msg_type not in supported_types:
+                    return jsonify({"status": "ignored", "reason": f"unsupported_type_{msg_type}"}), 200
 
-                # Valid Text Message
                 contact = value['contacts'][0]
                 phone = contact['wa_id']
                 name = contact['profile']['name']
-                text_body = message['text']['body']
                 meta_message_id = message['id']
+                
+                text_body = None
+                media_id = None
+                mime_type = None
+                
+                if msg_type == 'text':
+                    text_body = message['text']['body']
+                else:
+                    media_id = message[msg_type]['id']
+                    mime_type = message[msg_type].get('mime_type')
+                    text_body = message[msg_type].get('caption', '')
 
                 from app.services.whatsapp_service import WhatsAppService
                 try:
                     WhatsAppService.process_incoming_message(
-                        phone=phone, name=name, text=text_body, meta_message_id=meta_message_id
+                        phone=phone, name=name, text=text_body, meta_message_id=meta_message_id,
+                        media_id=media_id, mime_type=mime_type, msg_type=msg_type
                     )
                 except Exception:
                     # Meta retries on anything but 200, which would hammer us with the same

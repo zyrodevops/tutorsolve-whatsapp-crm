@@ -11,7 +11,7 @@ create_user_schema = CreateUserSchema()
 @require_role("ADMIN")
 def handle_users():
     if request.method == 'GET':
-        users = UserService.get_all_users(current_user_id=g.current_user.id)
+        users = UserService.get_all_users(current_user_id=g.current_user.get("id"))
         return jsonify({
             "status": "success",
             "data": users
@@ -37,7 +37,7 @@ def handle_users():
 @bp.route('/<user_id>', methods=['DELETE'])
 @require_role("ADMIN")
 def delete_user(user_id):
-    if user_id == g.current_user.id:
+    if user_id == g.current_user.get("id"):
         return jsonify({"status": "error", "message": "You cannot delete your own account"}), 400
 
     success, error = UserService.delete_user(user_id)
@@ -52,3 +52,27 @@ def delete_user(user_id):
         return jsonify({"status": "error", "message": "Failed to delete user"}), 500
 
     return jsonify({"status": "success", "message": "User deleted successfully"}), 200
+
+@bp.route('/<user_id>/status', methods=['PUT'])
+@require_role("ADMIN", "MANAGER", "AGENT")
+def update_status(user_id):
+    if user_id != g.current_user.get("id") and g.current_user.get("role") != "ADMIN":
+        return jsonify({"status": "error", "message": "You can only update your own status"}), 403
+
+    data = request.get_json()
+    if not data or 'agent_status' not in data:
+        return jsonify({"status": "error", "message": "Missing 'agent_status'"}), 400
+
+    new_status = data['agent_status']
+    if new_status not in ["ONLINE", "BUSY", "OFFLINE"]:
+        return jsonify({"status": "error", "message": "Invalid agent_status"}), 400
+
+    from app.db.firebase import db
+    user_ref = db.client.collection("users").document(user_id)
+    if not user_ref.get().exists:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+
+    user_ref.update({"agent_status": new_status})
+
+    return jsonify({"status": "success", "message": f"Status updated to {new_status}"}), 200
+

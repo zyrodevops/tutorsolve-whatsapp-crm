@@ -1,17 +1,18 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import String, Boolean, DateTime, ForeignKey
-from app.db.database import db
+from dataclasses import dataclass, field
 
-class CannedResponse(db.Model):
-    __tablename__ = 'canned_responses'
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    shortcut: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
-    message_body: Mapped[str] = mapped_column(String, nullable=False)
-    category: Mapped[str] = mapped_column(String(100), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_by: Mapped[str] = mapped_column(String(36), ForeignKey('users.id'), nullable=False)
-
-    creator = relationship("User")
+@dataclass
+class CannedResponse:
+    title: str
+    content: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "content": self.content,
+            "created_at": self.created_at
+        }

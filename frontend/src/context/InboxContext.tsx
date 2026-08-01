@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from 'react';
 import { API_URL } from '@/lib/config';
 import { useSocket } from '@/hooks/useSocket';
 import type { Conversation, NewMessagePayload } from '@/types/inbox';
@@ -13,6 +13,7 @@ interface InboxContextType {
   totalUnreadCount: number;
   markAsRead: (conversationId: string) => void;
   isConnected: boolean;
+  isLoading: boolean;
 }
 
 const InboxContext = createContext<InboxContextType | undefined>(undefined);
@@ -21,6 +22,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loadError, setLoadError] = useState('');
   const [newMessage, setNewMessage] = useState<NewMessagePayload | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const { on, off, isConnected } = useSocket();
 
@@ -37,12 +39,28 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error('Failed to load conversations', err);
       setLoadError('Failed to load conversations.');
+    } finally {
+      setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
+
+  // Any new_message/conversation_updated events emitted while disconnected
+  // are permanently missed (no server-side replay), so a reconnect must
+  // resync state -- but skip the very first connect, since the mount effect
+  // above already fetched.
+  const hasConnectedBeforeRef = useRef(false);
+  useEffect(() => {
+    if (!isConnected) return;
+    if (!hasConnectedBeforeRef.current) {
+      hasConnectedBeforeRef.current = true;
+      return;
+    }
+    fetchConversations();
+  }, [isConnected, fetchConversations]);
 
   useEffect(() => {
     const onNewMessage = (payload: NewMessagePayload) => {
@@ -74,9 +92,20 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       });
     };
 
+    const onConversationUpdated = (payload: { conversation_id: string, whatsapp_window_expires_at: string }) => {
+      setConversations(prev => prev.map(c => 
+        c.id === payload.conversation_id 
+          ? { ...c, whatsapp_window_expires_at: payload.whatsapp_window_expires_at }
+          : c
+      ));
+    };
+
     on('new_message', onNewMessage as (...args: unknown[]) => void);
+    on('conversation_updated', onConversationUpdated as (...args: unknown[]) => void);
+    
     return () => {
       off('new_message', onNewMessage as (...args: unknown[]) => void);
+      off('conversation_updated', onConversationUpdated as (...args: unknown[]) => void);
     };
   }, [on, off, fetchConversations]);
 
@@ -96,7 +125,8 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       newMessage, 
       totalUnreadCount,
       markAsRead,
-      isConnected
+      isConnected,
+      isLoading
     }}>
       {children}
     </InboxContext.Provider>

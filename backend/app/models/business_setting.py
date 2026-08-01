@@ -1,15 +1,23 @@
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, Boolean
-from app.db.database import db
+from dataclasses import dataclass, field
+from typing import Optional
 
-class BusinessSetting(db.Model):
-    __tablename__ = 'business_settings'
+@dataclass
+class BusinessSetting:
+    id: str = "global_config"
+    business_hours_start: Optional[str] = None
+    business_hours_end: Optional[str] = None
+    timezone: str = "UTC"
+    out_of_office_message: Optional[str] = None
+    first_greeting_message: Optional[str] = None
+    round_robin_enabled: bool = False
 
-    # Using a string ID to allow a single row e.g., 'global_config'
-    id: Mapped[str] = mapped_column(String(50), primary_key=True, default="global_config")
-    business_hours_start: Mapped[str] = mapped_column(String(5), nullable=True) # e.g., "09:00"
-    business_hours_end: Mapped[str] = mapped_column(String(5), nullable=True)   # e.g., "17:00"
-    timezone: Mapped[str] = mapped_column(String(50), default="UTC")
-    out_of_office_message: Mapped[str] = mapped_column(String, nullable=True)
-    first_greeting_message: Mapped[str] = mapped_column(String, nullable=True)
-    round_robin_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "business_hours_start": self.business_hours_start,
+            "business_hours_end": self.business_hours_end,
+            "timezone": self.timezone,
+            "out_of_office_message": self.out_of_office_message,
+            "first_greeting_message": self.first_greeting_message,
+            "round_robin_enabled": self.round_robin_enabled
+        }

@@ -1,11 +1,16 @@
 from flask_socketio import SocketIO, ConnectionRefusedError
 import jwt
 from flask import request
-from app.db.database import db
-from app.models.user import User
+from app.db.firebase import db
 from app.core.config import SECRET_KEY
 
-socketio = SocketIO(cors_allowed_origins="*")
+# Explicit "threading" async_mode (backed by the simple-websocket package for
+# real WebSocket support) rather than letting Flask-SocketIO auto-detect
+# eventlet/gevent. google-cloud-firestore's gRPC client bypasses greenlet
+# monkey-patching (gRPC's transport is a C-extension, not pure-Python
+# sockets), so any Firestore call under an eventlet/gevent worker hangs until
+# it times out. Plain OS threads don't have this problem.
+socketio = SocketIO(cors_allowed_origins="*", async_mode="threading")
 
 @socketio.on('connect')
 def handle_connect():
@@ -20,8 +25,8 @@ def handle_connect():
             raise ConnectionRefusedError('invalid token payload')
             
         # Verify user still exists
-        user = db.session.get(User, payload.get('sub'))
-        if not user or user.system_status != "ACTIVE":
+        user_doc = db.client.collection("users").document(payload.get('sub')).get()
+        if not user_doc.exists or user_doc.to_dict().get("system_status") != "ACTIVE":
             raise ConnectionRefusedError('invalid token')
             
     except jwt.ExpiredSignatureError:

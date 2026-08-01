@@ -1,22 +1,20 @@
 import pytest
 from app import create_app
-from app.db.database import db
+from mockfirestore import MockFirestore
+
+@pytest.fixture(autouse=True)
+def mock_db_client(mocker):
+    mock_db = MockFirestore()
+    mocker.patch('app.db.firebase.db.client', mock_db)
+    return mock_db
 
 @pytest.fixture
-def app():
-    # Create a Flask app configured for testing using an in-memory SQLite DB
+def app(mock_db_client):
     app = create_app({
         "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-        "SQLALCHEMY_TRACK_MODIFICATIONS": False
     })
-
     with app.app_context():
-        # Create tables before each test
-        db.create_all()
         yield app
-        # Drop tables after each test
-        db.drop_all()
 
 @pytest.fixture
 def client(app):

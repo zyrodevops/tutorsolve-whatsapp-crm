@@ -7,7 +7,7 @@ def test_whatsapp_webhook_verify_success(client, app, monkeypatch):
     """
     # Mock the python variable directly since it's loaded at import time
     monkeypatch.setattr("app.api.whatsapp.WHATSAPP_VERIFY_TOKEN", "test_secret_token_123")
-    
+
     response = client.get(
         "/webhook",
         query_string={
@@ -16,7 +16,7 @@ def test_whatsapp_webhook_verify_success(client, app, monkeypatch):
             "hub.challenge": "1158201444"
         }
     )
-    
+
     assert response.status_code == 200
     # Meta requires the exact challenge string returned as raw text, NOT json
     assert response.data.decode("utf-8") == "1158201444"
@@ -27,7 +27,7 @@ def test_whatsapp_webhook_verify_invalid_token(client, app, monkeypatch):
     verify token does not match.
     """
     monkeypatch.setattr("app.api.whatsapp.WHATSAPP_VERIFY_TOKEN", "test_secret_token_123")
-    
+
     response = client.get(
         "/webhook",
         query_string={
@@ -36,7 +36,7 @@ def test_whatsapp_webhook_verify_invalid_token(client, app, monkeypatch):
             "hub.challenge": "1158201444"
         }
     )
-    
+
     assert response.status_code == 403
 
 def test_whatsapp_webhook_verify_missing_params(client):
@@ -49,7 +49,7 @@ def test_whatsapp_webhook_verify_missing_params(client):
 
 # --- PHASE 2: WEBHOOK POST (RECEIVER) TESTS ---
 
-def test_whatsapp_webhook_receive_text_success(client):
+def test_whatsapp_webhook_receive_text_success(client, mock_db_client):
     """
     Test that a valid incoming text message is parsed correctly and acknowledged.
     """
@@ -73,14 +73,14 @@ def test_whatsapp_webhook_receive_text_success(client):
             }]
         }]
     }
-    
+
     response = client.post("/webhook", json=valid_payload)
     assert response.status_code == 200
     assert response.get_json()["status"] == "success"
 
-def test_whatsapp_webhook_receive_status_update(client):
+def test_whatsapp_webhook_receive_status_update(client, mock_db_client):
     """
-    Test that status updates (read receipts, delivery) are acknowledged with 200 OK 
+    Test that status updates (read receipts, delivery) are acknowledged with 200 OK
     but safely ignored without crashing.
     """
     status_payload = {
@@ -101,16 +101,16 @@ def test_whatsapp_webhook_receive_status_update(client):
             }]
         }]
     }
-    
+
     response = client.post("/webhook", json=status_payload)
     assert response.status_code == 200
     assert response.get_json()["status"] == "ignored"
     assert response.get_json()["reason"] == "status_update"
 
-def test_whatsapp_webhook_receive_unsupported_media(client):
+def test_whatsapp_webhook_receive_supported_image_media(client, mock_db_client):
     """
-    Test that unsupported media (images, audio) is acknowledged with 200 OK
-    but safely ignored without crashing.
+    Images are supported media (see Week 3 media handling): they should be
+    processed and acknowledged as success, not ignored.
     """
     image_payload = {
         "object": "whatsapp_business_account",
@@ -132,11 +132,41 @@ def test_whatsapp_webhook_receive_unsupported_media(client):
             }]
         }]
     }
-    
+
     response = client.post("/webhook", json=image_payload)
     assert response.status_code == 200
+    assert response.get_json()["status"] == "success"
+
+def test_whatsapp_webhook_receive_unsupported_media(client, mock_db_client):
+    """
+    Test that a genuinely unsupported message type (e.g. stickers) is
+    acknowledged with 200 OK but safely ignored without crashing.
+    """
+    sticker_payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": "123",
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "contacts": [{"profile": {"name": "Test User"}, "wa_id": "16505551234"}],
+                    "messages": [{
+                        "from": "16505551234",
+                        "id": "wamid.123",
+                        "timestamp": "1603059201",
+                        "type": "sticker",
+                        "sticker": {"id": "sticker123"}
+                    }]
+                }
+            }]
+        }]
+    }
+
+    response = client.post("/webhook", json=sticker_payload)
+    assert response.status_code == 200
     assert response.get_json()["status"] == "ignored"
-    assert response.get_json()["reason"] == "unsupported_type"
+    assert response.get_json()["reason"] == "unsupported_type_sticker"
 
 def test_whatsapp_webhook_malformed_payload(client):
     """
@@ -147,14 +177,14 @@ def test_whatsapp_webhook_malformed_payload(client):
         "not_an_object": "bad_data",
         "entry": []
     }
-    
+
     response = client.post("/webhook", json=invalid_payload)
     assert response.status_code == 400
     assert response.get_json()["status"] == "error"
     assert response.get_json()["message"]
     assert "object" in response.get_json()["errors"]
 
-def test_whatsapp_webhook_receive_stores_meta_message_id(client, app):
+def test_whatsapp_webhook_receive_stores_meta_message_id(client, app, mock_db_client):
     """
     Test that the inbound message row is saved with the Meta-provided message id,
     which is what makes duplicate webhook retries detectable.
@@ -183,8 +213,6 @@ def test_whatsapp_webhook_receive_stores_meta_message_id(client, app):
     response = client.post("/webhook", json=payload)
     assert response.status_code == 200
 
-    with app.app_context():
-        from app.models.message import Message
-        message = Message.query.filter_by(meta_message_id="wamid.unique-1").first()
-        assert message is not None
-        assert message.text_body == "Hi"
+    messages = list(mock_db_client.collection("messages").where("meta_message_id", "==", "wamid.unique-1").stream())
+    assert len(messages) == 1
+    assert messages[0].to_dict()["text_body"] == "Hi"

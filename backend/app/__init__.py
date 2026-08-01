@@ -1,7 +1,7 @@
 import os
 from flask import Flask, jsonify
 
-from app.db.database import db
+from app.db.firebase import db
 from flask_cors import CORS
 
 def create_app(test_config=None):
@@ -17,14 +17,25 @@ def create_app(test_config=None):
             "Customer phone number encryption is NOT secure until this is overridden."
         )
 
+    if not os.environ.get("SECRET_KEY"):
+        app.logger.warning(
+            "SECRET_KEY is not set -- falling back to the publicly-committed dev key. "
+            "JWTs can be forged (including ADMIN role) until this is overridden."
+        )
+
+    from app.core.config import MAX_UPLOAD_SIZE_BYTES
+    app.config['MAX_CONTENT_LENGTH'] = MAX_UPLOAD_SIZE_BYTES
+
     if test_config is None:
         # load the instance config, if it exists, when not testing
         app.config.from_pyfile('config.py', silent=True)
-        # default to sqlite if no env variable is set
-        app.config.setdefault('SQLALCHEMY_DATABASE_URI', os.environ.get('DATABASE_URL', 'sqlite:///app.db'))
     else:
         # load the test config if passed in
         app.config.from_mapping(test_config)
+
+    @app.errorhandler(413)
+    def handle_request_entity_too_large(e):
+        return jsonify({"status": "error", "message": "Upload exceeds the maximum allowed size", "code": "PAYLOAD_TOO_LARGE"}), 413
 
     db.init_app(app)
 
@@ -33,15 +44,14 @@ def create_app(test_config=None):
     socketio.init_app(app)
 
     # Register blueprints
-    from app.api.auth import bp as auth_bp
-    from app.api.users import bp as users_bp
-    from app.api.whatsapp import bp as whatsapp_bp
-    from app.api.conversations import bp as conv_bp
+    from app.api import auth, whatsapp, users, conversations, media, admin
     
-    app.register_blueprint(auth_bp)
-    app.register_blueprint(users_bp)
-    app.register_blueprint(whatsapp_bp)
-    app.register_blueprint(conv_bp)
+    app.register_blueprint(auth.bp)
+    app.register_blueprint(whatsapp.bp)
+    app.register_blueprint(users.bp)
+    app.register_blueprint(conversations.bp)
+    app.register_blueprint(media.bp)
+    app.register_blueprint(admin.bp)
 
     # ensure the instance folder exists
     try:
