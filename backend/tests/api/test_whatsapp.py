@@ -78,12 +78,8 @@ def test_whatsapp_webhook_receive_text_success(client, mock_db_client):
     assert response.status_code == 200
     assert response.get_json()["status"] == "success"
 
-def test_whatsapp_webhook_receive_status_update(client, mock_db_client):
-    """
-    Test that status updates (read receipts, delivery) are acknowledged with 200 OK
-    but safely ignored without crashing.
-    """
-    status_payload = {
+def _status_payload(meta_message_id: str, status: str) -> dict:
+    return {
         "object": "whatsapp_business_account",
         "entry": [{
             "id": "123",
@@ -92,8 +88,8 @@ def test_whatsapp_webhook_receive_status_update(client, mock_db_client):
                 "value": {
                     "messaging_product": "whatsapp",
                     "statuses": [{
-                        "id": "wamid.123",
-                        "status": "delivered",
+                        "id": meta_message_id,
+                        "status": status,
                         "timestamp": "1603059201",
                         "recipient_id": "16505551234"
                     }]
@@ -102,10 +98,110 @@ def test_whatsapp_webhook_receive_status_update(client, mock_db_client):
         }]
     }
 
-    response = client.post("/webhook", json=status_payload)
+def test_whatsapp_webhook_receive_status_update(client, mock_db_client):
+    """
+    A status webhook is acknowledged with 200 OK and safely ignored (no crash)
+    when it doesn't match any known message.
+    """
+    response = client.post("/webhook", json=_status_payload("wamid.unknown", "delivered"))
     assert response.status_code == 200
-    assert response.get_json()["status"] == "ignored"
-    assert response.get_json()["reason"] == "status_update"
+    assert response.get_json()["status"] == "success"
+
+def test_status_update_advances_delivery_status(client, mock_db_client):
+    from app.models.message import Message
+    from app.models.conversation import Conversation
+    from app.models.customer import Customer
+    from app.core.security import encrypt_phone, hash_phone
+
+    customer = Customer(phone_hash=hash_phone("111"), real_phone_number_encrypted=encrypt_phone("111"), masked_id="Lead-1")
+    mock_db_client.collection("customers").document(customer.id).set(customer.to_dict())
+    conv = Conversation(customer_id=customer.id)
+    mock_db_client.collection("conversations").document(conv.id).set(conv.to_dict())
+
+    msg = Message(
+        conversation_id=conv.id, sender_type="AGENT", message_type="TEXT",
+        direction="OUTBOUND", delivery_status="SENT", meta_message_id="wamid.abc"
+    )
+    mock_db_client.collection("messages").document(msg.id).set(msg.to_dict())
+
+    response = client.post("/webhook", json=_status_payload("wamid.abc", "delivered"))
+    assert response.status_code == 200
+
+    updated = mock_db_client.collection("messages").document(msg.id).get().to_dict()
+    assert updated["delivery_status"] == "DELIVERED"
+
+def test_status_update_progresses_from_delivered_to_read(client, mock_db_client):
+    from app.models.message import Message
+    from app.models.conversation import Conversation
+    from app.models.customer import Customer
+    from app.core.security import encrypt_phone, hash_phone
+
+    customer = Customer(phone_hash=hash_phone("112"), real_phone_number_encrypted=encrypt_phone("112"), masked_id="Lead-2")
+    mock_db_client.collection("customers").document(customer.id).set(customer.to_dict())
+    conv = Conversation(customer_id=customer.id)
+    mock_db_client.collection("conversations").document(conv.id).set(conv.to_dict())
+
+    msg = Message(
+        conversation_id=conv.id, sender_type="AGENT", message_type="TEXT",
+        direction="OUTBOUND", delivery_status="DELIVERED", meta_message_id="wamid.def"
+    )
+    mock_db_client.collection("messages").document(msg.id).set(msg.to_dict())
+
+    response = client.post("/webhook", json=_status_payload("wamid.def", "read"))
+    assert response.status_code == 200
+
+    updated = mock_db_client.collection("messages").document(msg.id).get().to_dict()
+    assert updated["delivery_status"] == "READ"
+
+def test_status_update_does_not_regress_from_read_to_delivered(client, mock_db_client):
+    """
+    Meta doesn't guarantee status webhooks arrive in order -- a late
+    'delivered' event must not overwrite an already-recorded 'read' status.
+    """
+    from app.models.message import Message
+    from app.models.conversation import Conversation
+    from app.models.customer import Customer
+    from app.core.security import encrypt_phone, hash_phone
+
+    customer = Customer(phone_hash=hash_phone("113"), real_phone_number_encrypted=encrypt_phone("113"), masked_id="Lead-3")
+    mock_db_client.collection("customers").document(customer.id).set(customer.to_dict())
+    conv = Conversation(customer_id=customer.id)
+    mock_db_client.collection("conversations").document(conv.id).set(conv.to_dict())
+
+    msg = Message(
+        conversation_id=conv.id, sender_type="AGENT", message_type="TEXT",
+        direction="OUTBOUND", delivery_status="READ", meta_message_id="wamid.ghi"
+    )
+    mock_db_client.collection("messages").document(msg.id).set(msg.to_dict())
+
+    response = client.post("/webhook", json=_status_payload("wamid.ghi", "delivered"))
+    assert response.status_code == 200
+
+    updated = mock_db_client.collection("messages").document(msg.id).get().to_dict()
+    assert updated["delivery_status"] == "READ"
+
+def test_status_update_failed_always_applies(client, mock_db_client):
+    from app.models.message import Message
+    from app.models.conversation import Conversation
+    from app.models.customer import Customer
+    from app.core.security import encrypt_phone, hash_phone
+
+    customer = Customer(phone_hash=hash_phone("114"), real_phone_number_encrypted=encrypt_phone("114"), masked_id="Lead-4")
+    mock_db_client.collection("customers").document(customer.id).set(customer.to_dict())
+    conv = Conversation(customer_id=customer.id)
+    mock_db_client.collection("conversations").document(conv.id).set(conv.to_dict())
+
+    msg = Message(
+        conversation_id=conv.id, sender_type="AGENT", message_type="TEXT",
+        direction="OUTBOUND", delivery_status="DELIVERED", meta_message_id="wamid.jkl"
+    )
+    mock_db_client.collection("messages").document(msg.id).set(msg.to_dict())
+
+    response = client.post("/webhook", json=_status_payload("wamid.jkl", "failed"))
+    assert response.status_code == 200
+
+    updated = mock_db_client.collection("messages").document(msg.id).get().to_dict()
+    assert updated["delivery_status"] == "FAILED"
 
 def test_whatsapp_webhook_receive_supported_image_media(client, mock_db_client):
     """

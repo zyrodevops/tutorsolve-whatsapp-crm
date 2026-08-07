@@ -48,16 +48,38 @@ def test_login_missing_fields(client):
     assert response.json["status"] == "error"
     assert "password" in response.json["errors"]
 
-def test_login_inactive_user(client, mock_db_client, test_user):
+def test_login_inactive_user_with_correct_password_gets_a_distinct_message(client, mock_db_client, test_user):
+    """
+    A deactivated account with the RIGHT password must not see the generic
+    "Invalid email or password" -- that's actively misleading (the agent
+    knows their password is correct) and won't tell them to contact an admin.
+    """
     mock_db_client.collection("users").document(test_user.id).update({"system_status": "INACTIVE"})
-        
+
     response = client.post('/api/auth/login', json={
         "email": "agent@test.com",
         "password": "securepassword123"
     })
-    
-    assert response.status_code == 401
+
+    assert response.status_code == 403
     assert response.json["status"] == "error"
+    assert "deactivated" in response.json["message"].lower()
+    assert response.json["code"] == "ACCOUNT_DEACTIVATED"
+
+def test_login_inactive_user_with_wrong_password_still_gets_generic_message(client, mock_db_client, test_user):
+    """
+    A wrong password must always look identical whether or not the account
+    is deactivated -- otherwise a wrong-password guess against a deactivated
+    account's email would confirm the account exists and is deactivated.
+    """
+    mock_db_client.collection("users").document(test_user.id).update({"system_status": "INACTIVE"})
+
+    response = client.post('/api/auth/login', json={
+        "email": "agent@test.com",
+        "password": "wrongpassword"
+    })
+
+    assert response.status_code == 401
     assert response.json["message"] == "Invalid email or password"
 
 def test_login_invalid_password(client, test_user):

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BarChart3, Users, MessageSquare, CheckCircle2 } from 'lucide-react';
+import { BarChart3, Users, MessageSquare, CheckCircle2, Timer } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
 import AppShell from '@/components/layout/AppShell';
@@ -16,6 +16,15 @@ interface AnalyticsData {
   total_conversations: number;
   open_conversations: number;
   resolved_conversations: number;
+  avg_response_time_seconds: number | null;
+}
+
+function formatResponseTime(seconds: number | null): string {
+  if (seconds === null) return 'N/A';
+  const totalMinutes = Math.round(seconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
 function AnalyticsContent() {
@@ -69,7 +78,7 @@ function AnalyticsContent() {
       {isLoading ? (
         <LoadingState label="Aggregating metrics..." />
       ) : data ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-6">
 
             <StatCard 
               title="Total Agents"
@@ -92,13 +101,20 @@ function AnalyticsContent() {
               icon={<BarChart3 className="w-6 h-6 text-[var(--color-brand-primary)]" />}
             />
             
-            <StatCard 
+            <StatCard
               title="Resolved"
               value={data.resolved_conversations}
               subtitle="Successfully closed"
               icon={<CheckCircle2 className="w-6 h-6 text-[var(--color-brand-primary)]" />}
             />
-            
+
+            <StatCard
+              title="Avg. Response Time"
+              value={formatResponseTime(data.avg_response_time_seconds)}
+              subtitle="Customer message to agent reply"
+              icon={<Timer className="w-6 h-6 text-[var(--color-brand-primary)]" />}
+            />
+
           </div>
         ) : null}
     </PageShell>
@@ -107,7 +123,7 @@ function AnalyticsContent() {
 
 interface StatCardProps {
   title: string;
-  value: number;
+  value: number | string;
   subtitle: string;
   icon: React.ReactNode;
 }

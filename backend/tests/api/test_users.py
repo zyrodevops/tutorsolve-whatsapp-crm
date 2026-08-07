@@ -203,3 +203,88 @@ def test_agent_cannot_get_users(client, agent_token):
 
     assert response.status_code == 403
     assert response.json["status"] == "error"
+
+def test_admin_deactivates_user(client, admin_token, mock_db_client):
+    user = User(full_name="To Deactivate", email="deactivate@test.com", password_hash="hash", role="AGENT")
+    mock_db_client.collection("users").document(user.id).set(user.to_dict())
+
+    client.set_cookie("access_token", admin_token)
+    response = client.patch(f"/api/users/{user.id}/system-status", json={"system_status": "INACTIVE"})
+
+    assert response.status_code == 200
+    assert response.json["status"] == "success"
+    assert response.json["data"]["system_status"] == "INACTIVE"
+    updated = mock_db_client.collection("users").document(user.id).get().to_dict()
+    assert updated["system_status"] == "INACTIVE"
+
+def test_admin_reactivates_user(client, admin_token, mock_db_client):
+    user = User(full_name="To Reactivate", email="reactivate@test.com", password_hash="hash", role="AGENT", system_status="INACTIVE")
+    mock_db_client.collection("users").document(user.id).set(user.to_dict())
+
+    client.set_cookie("access_token", admin_token)
+    response = client.patch(f"/api/users/{user.id}/system-status", json={"system_status": "ACTIVE"})
+
+    assert response.status_code == 200
+    updated = mock_db_client.collection("users").document(user.id).get().to_dict()
+    assert updated["system_status"] == "ACTIVE"
+
+def test_deactivated_user_token_is_rejected_on_next_request(client, admin_token, mock_db_client):
+    """
+    Deactivating a user must take effect immediately for any session they
+    already have open, not just block future logins -- otherwise a
+    deactivated agent could keep working until their token naturally expires.
+    """
+    user = User(full_name="Live Session", email="live@test.com", password_hash="hash", role="AGENT")
+    mock_db_client.collection("users").document(user.id).set(user.to_dict())
+    user_token = create_access_token(user_id=user.id, role="AGENT")
+
+    client.set_cookie("access_token", admin_token)
+    response = client.patch(f"/api/users/{user.id}/system-status", json={"system_status": "INACTIVE"})
+    assert response.status_code == 200
+
+    client.set_cookie("access_token", user_token)
+    response = client.get('/api/users')
+    assert response.status_code in (401, 403)
+
+def test_admin_cannot_deactivate_self(client, admin_token, mock_db_client):
+    docs = list(mock_db_client.collection("users").where("email", "==", "admin@test.com").limit(1).stream())
+    admin_id = docs[0].to_dict()["id"]
+
+    client.set_cookie("access_token", admin_token)
+    response = client.patch(f"/api/users/{admin_id}/system-status", json={"system_status": "INACTIVE"})
+
+    assert response.status_code == 400
+    assert response.json["status"] == "error"
+
+def test_agent_cannot_change_system_status(client, agent_token, mock_db_client):
+    user = User(full_name="Target", email="target@test.com", password_hash="hash", role="AGENT")
+    mock_db_client.collection("users").document(user.id).set(user.to_dict())
+
+    client.set_cookie("access_token", agent_token)
+    response = client.patch(f"/api/users/{user.id}/system-status", json={"system_status": "INACTIVE"})
+
+    assert response.status_code == 403
+
+def test_system_status_rejects_invalid_value(client, admin_token, mock_db_client):
+    user = User(full_name="Target", email="target2@test.com", password_hash="hash", role="AGENT")
+    mock_db_client.collection("users").document(user.id).set(user.to_dict())
+
+    client.set_cookie("access_token", admin_token)
+    response = client.patch(f"/api/users/{user.id}/system-status", json={"system_status": "DELETED"})
+
+    assert response.status_code == 400
+
+def test_system_status_missing_field(client, admin_token, mock_db_client):
+    user = User(full_name="Target", email="target3@test.com", password_hash="hash", role="AGENT")
+    mock_db_client.collection("users").document(user.id).set(user.to_dict())
+
+    client.set_cookie("access_token", admin_token)
+    response = client.patch(f"/api/users/{user.id}/system-status", json={})
+
+    assert response.status_code == 400
+
+def test_system_status_user_not_found(client, admin_token):
+    client.set_cookie("access_token", admin_token)
+    response = client.patch("/api/users/nonexistent-id/system-status", json={"system_status": "INACTIVE"})
+
+    assert response.status_code == 404

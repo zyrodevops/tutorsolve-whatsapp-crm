@@ -53,6 +53,33 @@ def delete_user(user_id):
 
     return jsonify({"status": "success", "message": "User deleted successfully"}), 200
 
+@bp.route('/<user_id>/system-status', methods=['PATCH'])
+@require_role("ADMIN")
+def update_system_status(user_id):
+    if user_id == g.current_user.get("id"):
+        return jsonify({"status": "error", "message": "You cannot deactivate your own account"}), 400
+
+    data = request.get_json()
+    if not data or 'system_status' not in data:
+        return jsonify({"status": "error", "message": "Missing 'system_status'"}), 400
+
+    new_status = data['system_status']
+    if new_status not in ["ACTIVE", "INACTIVE"]:
+        return jsonify({"status": "error", "message": "Invalid system_status"}), 400
+
+    from app.db.firebase import db
+    user_ref = db.client.collection("users").document(user_id)
+    if not user_ref.get().exists:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+
+    user_ref.update({"system_status": new_status})
+
+    return jsonify({
+        "status": "success",
+        "message": f"Account {'reactivated' if new_status == 'ACTIVE' else 'deactivated'}",
+        "data": {"system_status": new_status}
+    }), 200
+
 @bp.route('/<user_id>/status', methods=['PUT'])
 @require_role("ADMIN", "MANAGER", "AGENT")
 def update_status(user_id):

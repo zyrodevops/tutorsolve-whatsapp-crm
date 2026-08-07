@@ -8,12 +8,14 @@ import MessageThread from '@/components/inbox/MessageThread';
 import CrmSidebar from '@/components/inbox/CrmSidebar';
 import { InboxProvider, useInbox } from '@/context/InboxContext';
 import type { CurrentUser } from '@/types/auth';
+import type { Conversation } from '@/types/inbox';
 
 function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
-  const { conversations, loadError, newMessage, isConnected, markAsRead, isLoading } = useInbox();
-  
+  const { conversations, setConversations, loadError, newMessage, messageStatusUpdate, isConnected, markAsRead, isLoading } = useInbox();
+
   const [activeChat, setActiveChat] = useState<string | null>(null);
-  
+  const [isNoteMode, setIsNoteMode] = useState(false);
+
   // Resizable left pane (desktop only -- see isDesktop below)
   const [leftWidth, setLeftWidth] = useState(384); // Default 384px (w-96)
   const isDragging = useRef(false);
@@ -65,7 +67,25 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
 
   const handleSelectChat = (id: string) => {
     setActiveChat(id);
+    setIsNoteMode(false); // Note-composing state shouldn't carry over to a different conversation.
     markAsRead(id); // Optimistic UI update
+  };
+
+  const handleAddNote = () => {
+    setIsNoteMode(true);
+    setShowSidebar(false); // Reveal the compose box behind the CRM sidebar overlay on mobile.
+  };
+
+  const handleStatusChange = (conversationId: string, newStatus: Conversation['status']) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, status: newStatus } : c))
+    );
+  };
+
+  const handleTagsChange = (conversationId: string, tags: string[]) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, tags } : c))
+    );
   };
 
   const activeConversation = conversations.find((c) => c.id === activeChat);
@@ -104,7 +124,10 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
           conversationId={activeChat}
           conversation={activeConversation ?? null}
           newMessage={newMessage}
+          messageStatusUpdate={messageStatusUpdate}
           onBack={() => setActiveChat(null)}
+          isNoteMode={isNoteMode}
+          onNoteModeChange={setIsNoteMode}
         />
 
         {/* Floating Action Button for CRM Details */}
@@ -132,7 +155,13 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
             <X size={18} />
           </button>
         </div>
-        <CrmSidebar conversation={activeConversation ?? null} currentUser={currentUser} />
+        <CrmSidebar
+          conversation={activeConversation ?? null}
+          currentUser={currentUser}
+          onAddNote={handleAddNote}
+          onStatusChange={handleStatusChange}
+          onTagsChange={handleTagsChange}
+        />
       </div>
     </div>
   );

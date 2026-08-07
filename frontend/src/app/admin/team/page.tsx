@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, X, Trash2 } from 'lucide-react';
+import { Users, Plus, X, Trash2, UserX, UserCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
 import { Button } from '@/components/ui/Button';
@@ -124,6 +124,30 @@ function TeamManagementContent() {
   };
 
   const [pendingDeleteUser, setPendingDeleteUser] = useState<User | null>(null);
+  const [pendingDeactivateUser, setPendingDeactivateUser] = useState<User | null>(null);
+
+  const handleSetSystemStatus = async (userId: string, systemStatus: 'ACTIVE' | 'INACTIVE') => {
+    setPendingDeactivateUser(null);
+    try {
+      const response = await fetch(`${API_URL}/api/users/${userId}/system-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ system_status: systemStatus })
+      });
+
+      if (response.ok) {
+        setSuccess(systemStatus === 'ACTIVE' ? 'Account reactivated' : 'Account deactivated');
+        fetchUsers();
+      } else {
+        const payload = await response.json();
+        setError(payload.message || 'Failed to update account status');
+      }
+    } catch (err) {
+      console.error('Failed to update system status', err);
+      setError('An unexpected error occurred while updating account status');
+    }
+  };
 
   const handleDeleteUser = async () => {
     if (!pendingDeleteUser) return;
@@ -247,13 +271,32 @@ function TeamManagementContent() {
                             (You)
                           </span>
                         ) : (
-                          <button
-                            onClick={() => setPendingDeleteUser(user)}
-                            className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] transition-colors"
-                            title="Delete User"
-                          >
-                            <Trash2 className="w-4 h-4 inline-block" />
-                          </button>
+                          <div className="flex items-center justify-end gap-3">
+                            {user.system_status === 'ACTIVE' ? (
+                              <button
+                                onClick={() => setPendingDeactivateUser(user)}
+                                className="text-[var(--color-text-muted)] hover:text-orange-600 transition-colors"
+                                title="Deactivate User"
+                              >
+                                <UserX className="w-4 h-4 inline-block" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleSetSystemStatus(user.id, 'ACTIVE')}
+                                className="text-[var(--color-text-muted)] hover:text-[var(--color-brand-primary)] transition-colors"
+                                title="Reactivate User"
+                              >
+                                <UserCheck className="w-4 h-4 inline-block" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setPendingDeleteUser(user)}
+                              className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] transition-colors"
+                              title="Delete User"
+                            >
+                              <Trash2 className="w-4 h-4 inline-block" />
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -284,19 +327,38 @@ function TeamManagementContent() {
                       </span>
                     </div>
                   </div>
-                  <div className="flex justify-end pt-2">
+                  <div className="flex justify-end gap-1 pt-2">
                     {user.is_current_user ? (
                       <span className="text-xs font-medium text-[var(--color-text-muted)]">
                         (You)
                       </span>
                     ) : (
-                      <button
-                        onClick={() => setPendingDeleteUser(user)}
-                        className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] hover:bg-red-50 rounded-lg transition-colors"
-                        title="Delete User"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <>
+                        {user.system_status === 'ACTIVE' ? (
+                          <button
+                            onClick={() => setPendingDeactivateUser(user)}
+                            className="p-2 text-[var(--color-text-muted)] hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                            title="Deactivate User"
+                          >
+                            <UserX className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleSetSystemStatus(user.id, 'ACTIVE')}
+                            className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-brand-primary)] hover:bg-emerald-50 rounded-lg transition-colors"
+                            title="Reactivate User"
+                          >
+                            <UserCheck className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setPendingDeleteUser(user)}
+                          className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete User"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -392,6 +454,20 @@ function TeamManagementContent() {
           confirmLabel="Remove"
           onConfirm={handleDeleteUser}
           onCancel={() => setPendingDeleteUser(null)}
+        />
+      )}
+
+      {pendingDeactivateUser && (
+        <ConfirmModal
+          title="Deactivate this account?"
+          description={
+            <>
+              <span className="font-medium text-[var(--color-text-primary)]">{pendingDeactivateUser.full_name}</span> will immediately lose access -- any open session is signed out on their next request. Their history is kept, and you can reactivate the account anytime.
+            </>
+          }
+          confirmLabel="Deactivate"
+          onConfirm={() => handleSetSystemStatus(pendingDeactivateUser.id, 'INACTIVE')}
+          onCancel={() => setPendingDeactivateUser(null)}
         />
       )}
     </PageShell>

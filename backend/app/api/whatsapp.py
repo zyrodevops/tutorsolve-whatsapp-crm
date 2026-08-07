@@ -48,7 +48,16 @@ def webhook():
 
             # Edge Case 1: Status Updates (read receipts, delivery)
             if 'statuses' in value and value['statuses']:
-                return jsonify({"status": "ignored", "reason": "status_update"}), 200
+                status_obj = value['statuses'][0]
+                meta_message_id = status_obj.get('id')
+                status = status_obj.get('status')
+                if meta_message_id and status:
+                    from app.services.whatsapp_service import WhatsAppService
+                    try:
+                        WhatsAppService.process_status_update(meta_message_id, status)
+                    except Exception:
+                        logger.exception("Failed to process status update for %s", meta_message_id)
+                return jsonify({"status": "success"}), 200
 
             # Happy Path: Message exists
             if 'messages' in value and value['messages']:

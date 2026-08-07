@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, MessageCircle, Search } from 'lucide-react';
+import { User, MessageCircle, Search, UserCheck } from 'lucide-react';
 import type { Conversation } from '@/types/inbox';
 
 interface ChatListProps {
@@ -13,6 +13,9 @@ interface ChatListProps {
 export default function ChatList({ conversations, selectedId, onSelect, isSocketConnected, isLoading }: ChatListProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
+  const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
+
+  const allTags = Array.from(new Set(conversations.flatMap((conv) => conv.tags || []))).sort();
 
   // Helper for human-readable time
   const formatTime = (isoString: string | null) => {
@@ -32,7 +35,8 @@ export default function ChatList({ conversations, selectedId, onSelect, isSocket
     const matchesSearch = (conv.whatsapp_name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
                           (conv.masked_id || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesUnread = showUnreadOnly ? (conv.unread_count > 0) : true;
-    return matchesSearch && matchesUnread;
+    const matchesTag = activeTagFilter ? (conv.tags || []).includes(activeTagFilter) : true;
+    return matchesSearch && matchesUnread && matchesTag;
   });
 
   return (
@@ -72,6 +76,28 @@ export default function ChatList({ conversations, selectedId, onSelect, isSocket
             className="w-full pl-9 pr-4 py-2 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-100 focus:border-[var(--color-border-focus)] transition-shadow shadow-sm"
           />
         </div>
+
+        {allTags.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-1 -mb-1 [scrollbar-width:thin]">
+            {allTags.map((tag) => {
+              const isActive = activeTagFilter === tag;
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => setActiveTagFilter(isActive ? null : tag)}
+                  className={`shrink-0 px-3 py-1 text-xs font-semibold rounded-full border transition-colors whitespace-nowrap ${
+                    isActive
+                      ? 'bg-[var(--color-brand-primary)] text-white border-[var(--color-brand-primary)]'
+                      : 'bg-[var(--color-bg-surface)] text-[var(--color-text-secondary)] border-[var(--color-border-subtle)] hover:border-[var(--color-brand-primary)] hover:text-[var(--color-brand-primary)]'
+                  }`}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -125,6 +151,29 @@ export default function ChatList({ conversations, selectedId, onSelect, isSocket
               <p className={`text-sm truncate ${conv.unread_count > 0 ? 'font-semibold text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}>
                 {conv.last_message_preview || "No messages yet"}
               </p>
+              {conv.assigned_agent_name && (
+                <div className="flex items-center gap-1 mt-1 text-[10px] font-medium text-[var(--color-text-muted)] truncate">
+                  <UserCheck size={11} className="flex-shrink-0" />
+                  <span className="truncate">Assigned to {conv.assigned_agent_name}</span>
+                </div>
+              )}
+              {conv.tags && conv.tags.length > 0 && (
+                <div className="flex gap-1 mt-1.5 overflow-hidden">
+                  {conv.tags.slice(0, 2).map((tag) => (
+                    <span
+                      key={tag}
+                      className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                  {conv.tags.length > 2 && (
+                    <span className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold text-[var(--color-text-muted)]">
+                      +{conv.tags.length - 2}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ))}

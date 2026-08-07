@@ -5,11 +5,18 @@ import { API_URL } from '@/lib/config';
 import { useSocket } from '@/hooks/useSocket';
 import type { Conversation, NewMessagePayload } from '@/types/inbox';
 
+export interface MessageStatusUpdatePayload {
+  conversation_id: string;
+  message_id: string;
+  delivery_status: string;
+}
+
 interface InboxContextType {
   conversations: Conversation[];
   setConversations: React.Dispatch<React.SetStateAction<Conversation[]>>;
   loadError: string;
   newMessage: NewMessagePayload | null;
+  messageStatusUpdate: MessageStatusUpdatePayload | null;
   totalUnreadCount: number;
   markAsRead: (conversationId: string) => void;
   isConnected: boolean;
@@ -22,6 +29,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loadError, setLoadError] = useState('');
   const [newMessage, setNewMessage] = useState<NewMessagePayload | null>(null);
+  const [messageStatusUpdate, setMessageStatusUpdate] = useState<MessageStatusUpdatePayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const { on, off, isConnected } = useSocket();
@@ -100,12 +108,18 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       ));
     };
 
+    const onMessageStatusUpdated = (payload: MessageStatusUpdatePayload) => {
+      setMessageStatusUpdate(payload);
+    };
+
     on('new_message', onNewMessage as (...args: unknown[]) => void);
     on('conversation_updated', onConversationUpdated as (...args: unknown[]) => void);
-    
+    on('message_status_updated', onMessageStatusUpdated as (...args: unknown[]) => void);
+
     return () => {
       off('new_message', onNewMessage as (...args: unknown[]) => void);
       off('conversation_updated', onConversationUpdated as (...args: unknown[]) => void);
+      off('message_status_updated', onMessageStatusUpdated as (...args: unknown[]) => void);
     };
   }, [on, off, fetchConversations]);
 
@@ -121,8 +135,9 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
     <InboxContext.Provider value={{ 
       conversations, 
       setConversations, 
-      loadError, 
-      newMessage, 
+      loadError,
+      newMessage,
+      messageStatusUpdate,
       totalUnreadCount,
       markAsRead,
       isConnected,

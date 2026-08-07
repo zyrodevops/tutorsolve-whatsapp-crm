@@ -1,16 +1,33 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { MessageSquare, Send, AlertCircle, ChevronLeft, Paperclip, X, Zap } from 'lucide-react';
 import { API_URL } from '@/lib/config';
+import Linkify from '@/components/ui/Linkify';
+import MessageStatusTicks from '@/components/inbox/MessageStatusTicks';
 import type { Message, NewMessagePayload, Conversation } from '@/types/inbox';
+import type { MessageStatusUpdatePayload } from '@/context/InboxContext';
 
 interface MessageThreadProps {
   conversationId: string | null;
   conversation?: Conversation | null;
   newMessage?: NewMessagePayload | null;
+  messageStatusUpdate?: MessageStatusUpdatePayload | null;
   onBack?: () => void;
+  // Optional controlled note-mode pair, so a sibling component (e.g. the CRM
+  // sidebar's "Add Note" quick action) can trigger note mode from outside.
+  // Falls back to internal state when not provided, so standalone usage
+  // (including existing tests) is unaffected.
+  isNoteMode?: boolean;
+  onNoteModeChange?: (value: boolean) => void;
 }
 
 const NEAR_BOTTOM_THRESHOLD_PX = 150;
+
+function formatTimeRemaining(msRemaining: number): string {
+  const totalMinutes = Math.floor(msRemaining / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}h ${minutes}m left` : `${minutes}m left`;
+}
 
 // Mirrors the server-side cap (MAX_UPLOAD_SIZE_BYTES in backend/app/core/config.py) so
 // oversized files are rejected instantly instead of round-tripping to the server first.
@@ -31,7 +48,7 @@ function isAllowedAttachmentType(mimeType: string): boolean {
     || ALLOWED_DOCUMENT_MIME_TYPES.includes(mimeType);
 }
 
-export default function MessageThread({ conversationId, conversation, newMessage, onBack }: MessageThreadProps) {
+export default function MessageThread({ conversationId, conversation, newMessage, messageStatusUpdate, onBack, isNoteMode: controlledNoteMode, onNoteModeChange }: MessageThreadProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -41,13 +58,35 @@ export default function MessageThread({ conversationId, conversation, newMessage
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const forceScrollRef = useRef(false);
-  const [isNoteMode, setIsNoteMode] = useState(false);
+  const [internalNoteMode, setInternalNoteMode] = useState(false);
+  const isNoteMode = controlledNoteMode ?? internalNoteMode;
+  const setIsNoteMode = onNoteModeChange ?? setInternalNoteMode;
   const [attachment, setAttachment] = useState<File | null>(null);
   const [attachmentError, setAttachmentError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isWindowClosed, setIsWindowClosed] = useState(false);
+  const [timeRemainingLabel, setTimeRemainingLabel] = useState<string | null>(null);
   const [quickReplies, setQuickReplies] = useState<{id: string, shortcut: string, message: string}[]>([]);
-  const [selectedTemplate, setSelectedTemplate] = useState('hello_world');
+  const [templates, setTemplates] = useState<{id: string, template_name: string}[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+
+  useEffect(() => {
+    const fetchTemplates = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/meta-templates`, { credentials: 'include' });
+        if (res.ok) {
+          const body = await res.json();
+          setTemplates(body.data);
+          if (body.data.length > 0) {
+            setSelectedTemplate((prev) => prev || body.data[0].template_name);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch templates', err);
+      }
+    };
+    fetchTemplates();
+  }, []);
 
   useEffect(() => {
     const fetchQuickReplies = async () => {
@@ -68,9 +107,10 @@ export default function MessageThread({ conversationId, conversation, newMessage
   useEffect(() => {
     if (!conversation?.whatsapp_window_expires_at) {
       setIsWindowClosed(false);
+      setTimeRemainingLabel(null);
       return;
     }
-    
+
     const checkExpiry = () => {
       const expiresAt = new Date(conversation.whatsapp_window_expires_at as string);
       if (Number.isNaN(expiresAt.getTime())) {
@@ -79,9 +119,12 @@ export default function MessageThread({ conversationId, conversation, newMessage
         // 24-hour compliance rule would silently never lock the input.
         console.error('Unparseable whatsapp_window_expires_at, treating window as closed:', conversation.whatsapp_window_expires_at);
         setIsWindowClosed(true);
+        setTimeRemainingLabel(null);
         return;
       }
-      setIsWindowClosed(new Date() > expiresAt);
+      const msRemaining = expiresAt.getTime() - new Date().getTime();
+      setIsWindowClosed(msRemaining <= 0);
+      setTimeRemainingLabel(msRemaining > 0 ? formatTimeRemaining(msRemaining) : null);
     };
     
     checkExpiry();
@@ -135,6 +178,22 @@ export default function MessageThread({ conversationId, conversation, newMessage
         if (prev.find(m => m.id === newMessage.message.id)) return prev;
         return [...prev, newMessage.message];
       });
+    }
+  }
+
+  // Apply live delivery/read-receipt updates during render (same pattern as
+  // the newMessage handling above), guarded so a given status payload is
+  // only ever applied once even though the prop reference stays stable
+  // across unrelated re-renders.
+  const [lastAppliedStatusUpdate, setLastAppliedStatusUpdate] = useState<MessageStatusUpdatePayload | null | undefined>(undefined);
+  if (messageStatusUpdate !== lastAppliedStatusUpdate) {
+    setLastAppliedStatusUpdate(messageStatusUpdate);
+    if (messageStatusUpdate && messageStatusUpdate.conversation_id === conversationId) {
+      setMessages(prev => prev.map(m =>
+        m.id === messageStatusUpdate.message_id
+          ? { ...m, delivery_status: messageStatusUpdate.delivery_status }
+          : m
+      ));
     }
   }
 
@@ -209,7 +268,10 @@ export default function MessageThread({ conversationId, conversation, newMessage
       if (res.ok) {
         const body = await res.json();
         forceScrollRef.current = true;
-        setMessages(prev => [...prev, body.data]);
+        // The server's socketio.emit fires before this response returns and
+        // is broadcast to the sender too, so the echo can beat this response
+        // back to the browser -- don't add the same message twice.
+        setMessages(prev => prev.find(m => m.id === body.data.id) ? prev : [...prev, body.data]);
         setInputText('');
         setAttachment(null);
         if (isNoteMode) setIsNoteMode(false);
@@ -241,7 +303,7 @@ export default function MessageThread({ conversationId, conversation, newMessage
       if (res.ok) {
         const body = await res.json();
         forceScrollRef.current = true;
-        setMessages(prev => [...prev, body.data]);
+        setMessages(prev => prev.find(m => m.id === body.data.id) ? prev : [...prev, body.data]);
       } else {
         const body = await res.json().catch(() => null);
         setSendError(body?.message || 'Failed to send template.');
@@ -280,6 +342,14 @@ export default function MessageThread({ conversationId, conversation, newMessage
           </button>
         )}
         <h3 className="font-semibold text-[var(--color-text-primary)] text-lg">Message History</h3>
+        {timeRemainingLabel && (
+          <span
+            className="ml-auto text-xs font-medium text-[var(--color-text-muted)] bg-[var(--color-bg-base)] px-2.5 py-1 rounded-full flex-shrink-0"
+            title="Time remaining in the 24-hour WhatsApp reply window"
+          >
+            {timeRemainingLabel}
+          </span>
+        )}
       </div>
 
       {/* Thread */}
@@ -323,7 +393,9 @@ export default function MessageThread({ conversationId, conversation, newMessage
                     isNote ? 'bg-yellow-100 border border-yellow-200 text-yellow-900' :
                     isAgent ? 'bg-[var(--color-brand-primary)] text-white rounded-br-none' : 'bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-bl-none'
                   }`}>
-                    <p className="text-sm whitespace-pre-wrap">{msg.text_body}</p>
+                    <p className="text-sm whitespace-pre-wrap">
+                      {msg.text_body && <Linkify text={msg.text_body} isOnColoredBackground={isAgent} />}
+                    </p>
                     
                     {msg.media_url && msg.message_type === 'IMAGE' && (
                       <img src={`${API_URL}${msg.media_url}`} alt="Media" className="mt-2 rounded-lg max-w-full max-h-64 object-contain shadow-sm border border-black/5" />
@@ -337,8 +409,11 @@ export default function MessageThread({ conversationId, conversation, newMessage
                       </a>
                     )}
 
-                    <div className={`text-[10px] mt-1 text-right ${isNote ? 'text-yellow-600' : isAgent ? 'text-emerald-100' : 'text-[var(--color-text-muted)]'}`}>
+                    <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isNote ? 'text-yellow-600' : isAgent ? 'text-emerald-100' : 'text-[var(--color-text-muted)]'}`}>
                       {msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {isAgent && msg.direction === 'OUTBOUND' && (
+                        <MessageStatusTicks status={msg.delivery_status} />
+                      )}
                     </div>
                   </div>
                 </div>
@@ -439,8 +514,13 @@ export default function MessageThread({ conversationId, conversation, newMessage
                   className="bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 min-w-32"
                   value={selectedTemplate}
                   onChange={(e) => setSelectedTemplate(e.target.value)}
+                  disabled={templates.length === 0}
                 >
-                  <option value="hello_world">hello_world</option>
+                  {templates.length === 0 ? (
+                    <option value="">No approved templates</option>
+                  ) : (
+                    templates.map((t) => <option key={t.id} value={t.template_name}>{t.template_name}</option>)
+                  )}
                 </select>
               </div>
             </div>
@@ -468,6 +548,8 @@ export default function MessageThread({ conversationId, conversation, newMessage
           <button
             onClick={isWindowClosed && !isNoteMode ? handleSendTemplate : handleSend}
             disabled={((!inputText.trim() && !attachment) && !(isWindowClosed && !isNoteMode)) || isSending || (isWindowClosed && !isNoteMode && !selectedTemplate)}
+            title={isNoteMode ? 'Save note' : 'Send message'}
+            aria-label={isNoteMode ? 'Save note' : 'Send message'}
             className={`p-3 mb-1 text-white rounded-full transition-transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:hover:scale-100 shadow-md flex-shrink-0 ${isNoteMode ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-[var(--color-brand-primary)] hover:bg-[var(--color-brand-hover)]'}`}
           >
             <Send size={18} className="ml-0.5" />

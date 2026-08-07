@@ -5,6 +5,7 @@ export interface Conversation {
   last_message_preview: string | null;
   last_message_at: string | null;
   assigned_agent_id: string | null;
+  assigned_agent_name?: string | null;
   masked_id: string;
   whatsapp_name: string | null;
   profile_photo_url: string | null;

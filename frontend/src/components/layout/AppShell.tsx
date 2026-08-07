@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Inbox, Users, LogOut, MessageSquare, Circle, BarChart3, Zap } from 'lucide-react';
+import { Inbox, Users, LogOut, MessageSquare, Circle, BarChart3, Zap, ShieldAlert, Settings, FileText, Tag as TagIcon } from 'lucide-react';
 import { API_URL } from '@/lib/config';
 import type { CurrentUser } from '@/types/auth';
 import { useInbox } from '@/context/InboxContext';
@@ -27,6 +27,10 @@ const NAV_ITEMS: NavItem[] = [
   // admin/quick-replies/page.tsx only renders its content for ADMIN (and the
   // backend's create/delete routes are ADMIN-only too), so the link must match.
   { href: '/admin/quick-replies', label: 'Quick Replies', mobileLabel: 'Replies', icon: Zap, roles: ['ADMIN'] },
+  { href: '/admin/templates', label: 'Templates', icon: FileText, roles: ['ADMIN'] },
+  { href: '/admin/tags', label: 'Tags', icon: TagIcon, roles: ['ADMIN'] },
+  { href: '/admin/audit-logs', label: 'Audit Log', mobileLabel: 'Audit', icon: ShieldAlert, roles: ['ADMIN'] },
+  { href: '/admin/settings', label: 'Settings', icon: Settings, roles: ['ADMIN'] },
 ];
 
 function initials(fullName: string): string {

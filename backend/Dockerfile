@@ -40,4 +40,16 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # state isn't shared across processes without a message queue (e.g. Redis),
 # which this app doesn't have configured; multiple threads within that one
 # process still provide real request concurrency.
-CMD ["gunicorn", "--worker-class", "gthread", "--threads", "8", "-w", "1", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "--error-logfile", "-", "main:app"]
+#
+# --threads is deliberately generous (not the gunicorn default of a
+# handful): under this threading model, every OPEN WebSocket connection
+# permanently occupies one thread for as long as it's connected, since
+# Flask-SocketIO's threading async_mode uses one blocking OS thread per
+# client rather than a lightweight coroutine. With only a few threads, a
+# handful of agents simply having the inbox open at once can exhaust the
+# whole pool, leaving nothing free to handle actual HTTP requests (sending a
+# message, loading a conversation) -- those then queue or time out, which is
+# exactly the intermittent "webhook/websocket connection error" this fixes.
+# OS threads are cheap for I/O-bound work like this, so headroom here costs
+# little.
+CMD ["gunicorn", "--worker-class", "gthread", "--threads", "60", "-w", "1", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "--error-logfile", "-", "main:app"]

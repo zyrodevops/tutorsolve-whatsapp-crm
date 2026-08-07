@@ -6,21 +6,36 @@ from app.services.whatsapp_service import WhatsAppService, ConversationNotFoundE
 
 bp = Blueprint('conversations', __name__, url_prefix='/api/conversations')
 
+VALID_CONVERSATION_STATUSES = {"OPEN", "PENDING", "RESOLVED"}
+
 @bp.route('', methods=['GET'])
 @require_role('ADMIN', 'MANAGER', 'AGENT')
 def get_conversations():
     convs_ref = db.client.collection("conversations")
     docs = convs_ref.order_by("last_message_at", direction=Query.DESCENDING).stream()
-    
+
+    # Round robin means the same few agents repeat across many conversations
+    # -- resolve each agent id's name at most once per request rather than on
+    # every conversation.
+    agent_name_cache: dict[str, str | None] = {}
+
     conversations = []
     for doc in docs:
         conv = doc.to_dict()
         cust_doc = db.client.collection("customers").document(conv.get("customer_id")).get()
         cust = cust_doc.to_dict() if cust_doc.exists else {}
-        
+
         last_message_at = conv.get("last_message_at")
         expires_at = conv.get("whatsapp_window_expires_at")
-        
+
+        assigned_agent_id = conv.get("assigned_agent_id")
+        assigned_agent_name = None
+        if assigned_agent_id:
+            if assigned_agent_id not in agent_name_cache:
+                agent_doc = db.client.collection("users").document(assigned_agent_id).get()
+                agent_name_cache[assigned_agent_id] = agent_doc.to_dict().get("full_name") if agent_doc.exists else None
+            assigned_agent_name = agent_name_cache[assigned_agent_id]
+
         conversations.append({
             "id": conv.get("id"),
             "status": conv.get("status"),
@@ -29,7 +44,8 @@ def get_conversations():
             "unread_count": conv.get("unread_count", 0),
             "last_message_preview": conv.get("last_message_preview"),
             "last_message_at": last_message_at.isoformat() if hasattr(last_message_at, "isoformat") else str(last_message_at) if last_message_at else None,
-            "assigned_agent_id": conv.get("assigned_agent_id"),
+            "assigned_agent_id": assigned_agent_id,
+            "assigned_agent_name": assigned_agent_name,
             "masked_id": cust.get("masked_id"),
             "whatsapp_name": cust.get("whatsapp_name"),
             "profile_photo_url": cust.get("profile_photo_url")
@@ -62,6 +78,8 @@ def get_messages(conversation_id):
             "sender_type": msg.get("sender_type"),
             "message_type": msg.get("message_type"),
             "text_body": msg.get("text_body"),
+            "media_url": msg.get("media_url"),
+            "media_mime_type": msg.get("media_mime_type"),
             "delivery_status": msg.get("delivery_status"),
             "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
         })
@@ -207,6 +225,32 @@ def update_tags(conversation_id):
         "status": "success",
         "message": "Tags updated successfully",
         "data": {"tags": tags}
+    }), 200
+
+@bp.route('/<conversation_id>/status', methods=['PATCH'])
+@require_role('ADMIN', 'MANAGER', 'AGENT')
+def update_status(conversation_id):
+    data = request.get_json()
+    if not data or 'status' not in data:
+        return jsonify({"status": "error", "message": "Missing 'status' in request body"}), 400
+
+    new_status = data['status']
+    if new_status not in VALID_CONVERSATION_STATUSES:
+        return jsonify({
+            "status": "error",
+            "message": f"'status' must be one of {sorted(VALID_CONVERSATION_STATUSES)}"
+        }), 400
+
+    conv_ref = db.client.collection("conversations").document(conversation_id)
+    if not conv_ref.get().exists:
+        return jsonify({"status": "error", "message": "Conversation not found"}), 404
+
+    conv_ref.update({"status": new_status})
+
+    return jsonify({
+        "status": "success",
+        "message": "Conversation status updated successfully",
+        "data": {"status": new_status}
     }), 200
 
 @bp.route('/<conversation_id>/messages/template', methods=['POST'])

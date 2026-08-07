@@ -17,6 +17,64 @@ class ConversationNotFoundError(Exception):
 class CustomerNotFoundError(Exception):
     """Raised when a conversation's customer record is missing."""
 
+MESSAGE_PREVIEW_LABELS = {
+    "TEXT": "Message",
+    "IMAGE": "\U0001F4F7 Photo",
+    "VIDEO": "\U0001F3A5 Video",
+    "AUDIO": "\U0001F3B5 Audio",
+    "VOICE": "\U0001F3A4 Voice message",
+    "DOCUMENT": "\U0001F4C4 Document",
+    "STICKER": "Sticker",
+}
+
+def _build_message_preview(text: str | None, message_type: str) -> str:
+    """
+    The inbox chat list shows this as the one-line summary of a conversation.
+    A caption/body always wins; without one, fall back to a WhatsApp-style
+    friendly label instead of the raw message_type -- both because a bare
+    "[DOCUMENT]" reads as a bug, not a feature, and because an empty string
+    makes the chat list wrongly claim "No messages yet" for a real message.
+    """
+    if text:
+        return text[:50]
+    return MESSAGE_PREVIEW_LABELS.get(message_type, message_type.title())
+
+DEFAULT_GREETING_MESSAGE = "Hi there! Welcome. An agent will be with you shortly."
+BUSINESS_SETTINGS_DOC_ID = "global_config"
+
+def _is_within_business_hours(settings: dict, now: datetime | None = None) -> bool:
+    """
+    No hours configured means "always open" -- a business that hasn't set
+    hours yet shouldn't suddenly go silent outside some arbitrary default window.
+    """
+    start = settings.get("business_hours_start")
+    end = settings.get("business_hours_end")
+    if not start or not end:
+        return True
+
+    from zoneinfo import ZoneInfo
+    try:
+        tz = ZoneInfo(settings.get("timezone") or "UTC")
+    except Exception:
+        tz = ZoneInfo("UTC")
+
+    now_local = (now or datetime.now(timezone.utc)).astimezone(tz)
+
+    try:
+        start_h, start_m = (int(p) for p in start.split(":"))
+        end_h, end_m = (int(p) for p in end.split(":"))
+    except (ValueError, AttributeError):
+        return True
+
+    start_minutes = start_h * 60 + start_m
+    end_minutes = end_h * 60 + end_m
+    now_minutes = now_local.hour * 60 + now_local.minute
+
+    if start_minutes <= end_minutes:
+        return start_minutes <= now_minutes < end_minutes
+    # Overnight window (e.g. 22:00 -> 06:00) wraps past midnight.
+    return now_minutes >= start_minutes or now_minutes < end_minutes
+
 def _pick_next_agent_id(sorted_agent_ids: list[str], last_assigned_id: str | None) -> str | None:
     """
     Rotates through agents in a fixed order rather than picking randomly, so
@@ -30,7 +88,53 @@ def _pick_next_agent_id(sorted_agent_ids: list[str], last_assigned_id: str | Non
         return sorted_agent_ids[(idx + 1) % len(sorted_agent_ids)]
     return sorted_agent_ids[0]
 
+# Meta's status webhooks don't guarantee delivery order, so a status can only
+# move a message forward through this progression -- a late "delivered" must
+# never overwrite an already-recorded "read". FAILED is terminal and applies
+# unconditionally regardless of rank.
+STATUS_RANK = {"SENT": 1, "DELIVERED": 2, "READ": 3}
+META_STATUS_TO_DELIVERY_STATUS = {
+    "sent": "SENT",
+    "delivered": "DELIVERED",
+    "read": "READ",
+    "failed": "FAILED",
+}
+
 class WhatsAppService:
+    @staticmethod
+    def process_status_update(meta_message_id: str, status: str) -> None:
+        new_delivery_status = META_STATUS_TO_DELIVERY_STATUS.get(status)
+        if not new_delivery_status:
+            return
+
+        matches = list(
+            db.client.collection("messages")
+            .where("meta_message_id", "==", meta_message_id)
+            .limit(1)
+            .stream()
+        )
+        if not matches:
+            return
+
+        msg_doc = matches[0]
+        msg_data = msg_doc.to_dict()
+        current_delivery_status = msg_data.get("delivery_status")
+
+        if new_delivery_status != "FAILED":
+            current_rank = STATUS_RANK.get(current_delivery_status, 0)
+            new_rank = STATUS_RANK.get(new_delivery_status, 0)
+            if new_rank <= current_rank:
+                return
+
+        db.client.collection("messages").document(msg_doc.id).update({"delivery_status": new_delivery_status})
+
+        from app.core.socket_events import socketio
+        socketio.emit('message_status_updated', {
+            'conversation_id': msg_data.get("conversation_id"),
+            'message_id': msg_doc.id,
+            'delivery_status': new_delivery_status
+        })
+
     @staticmethod
     def process_incoming_message(
         phone: str, name: str, text: str | None, meta_message_id: str | None = None,
@@ -48,6 +152,7 @@ class WhatsAppService:
         customers_ref = db.client.collection("customers")
         convs_ref = db.client.collection("conversations")
         routing_state_ref = db.client.collection("business_settings").document("routing_state")
+        business_settings_ref = db.client.collection("business_settings").document(BUSINESS_SETTINGS_DOC_ID)
 
         phone_hash_val = hash_phone(phone)
         customer_ref = customers_ref.document(phone_hash_val)
@@ -64,6 +169,7 @@ class WhatsAppService:
 
             online_agents = []
             last_assigned_agent_id = None
+            round_robin_enabled = True
             if not results:
                 online_agents = list(
                     db.client.collection("users")
@@ -74,6 +180,10 @@ class WhatsAppService:
                 routing_state_snapshot = next(transaction.get(routing_state_ref))
                 if routing_state_snapshot.exists:
                     last_assigned_agent_id = routing_state_snapshot.to_dict().get("last_assigned_agent_id")
+
+                settings_snapshot = next(transaction.get(business_settings_ref))
+                if settings_snapshot.exists:
+                    round_robin_enabled = settings_snapshot.to_dict().get("round_robin_enabled", True)
 
             # --- Pure decision-making over the data we already read. ---
             is_new_window = False
@@ -109,8 +219,10 @@ class WhatsAppService:
                 ).to_dict())
 
             if not results:
-                sorted_agent_ids = sorted(agent_doc.id for agent_doc in online_agents)
-                assigned_agent_id = _pick_next_agent_id(sorted_agent_ids, last_assigned_agent_id)
+                assigned_agent_id = None
+                if round_robin_enabled:
+                    sorted_agent_ids = sorted(agent_doc.id for agent_doc in online_agents)
+                    assigned_agent_id = _pick_next_agent_id(sorted_agent_ids, last_assigned_agent_id)
                 conversation = Conversation(
                     customer_id=phone_hash_val,
                     status="OPEN",
@@ -146,7 +258,7 @@ class WhatsAppService:
         )
         messages_ref.document(message.id).set(message.to_dict())
 
-        preview = text[:50] if text else f"[{message_type}]"
+        preview = _build_message_preview(text, message_type)
         convs_ref.document(conversation_id).update({
             "last_message_preview": preview,
             "unread_count": firestore.Increment(1),
@@ -177,11 +289,16 @@ class WhatsAppService:
         
         # Trigger greeting automation if this is a new window
         if is_new_window:
-            WhatsAppService.send_message(
-                conversation_id, 
-                "Hi there! Welcome. An agent will be with you shortly.", 
-                sender_id="system"
-            )
+            settings_doc = business_settings_ref.get()
+            settings = settings_doc.to_dict() if settings_doc.exists else {}
+
+            if _is_within_business_hours(settings):
+                greeting = settings.get("first_greeting_message") or DEFAULT_GREETING_MESSAGE
+                WhatsAppService.send_message(conversation_id, greeting, sender_id="system")
+            else:
+                out_of_office = settings.get("out_of_office_message")
+                if out_of_office:
+                    WhatsAppService.send_message(conversation_id, out_of_office, sender_id="system")
 
     @staticmethod
     def send_message(conversation_id: str, text: str, sender_id: str | None = None) -> tuple[bool, str | None]:
@@ -232,7 +349,7 @@ class WhatsAppService:
 
             now = datetime.now(timezone.utc)
             convs_ref.document(conversation_id).update({
-                "last_message_preview": text[:50] if text else "",
+                "last_message_preview": _build_message_preview(text, "TEXT"),
                 "last_message_at": now
             })
 
@@ -349,7 +466,7 @@ class WhatsAppService:
             db.client.collection("messages").document(outbound_msg.id).set(outbound_msg.to_dict())
 
             now = datetime.now(timezone.utc)
-            preview = text[:50] if text else f"[{msg_type.upper()}]"
+            preview = _build_message_preview(text, msg_type.upper())
             convs_ref.document(conversation_id).update({
                 "last_message_preview": preview,
                 "last_message_at": now

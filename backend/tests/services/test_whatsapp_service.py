@@ -3,6 +3,7 @@ from app.services.whatsapp_service import WhatsAppService
 from app.core.security import encrypt_phone, hash_phone
 from app.models.customer import Customer
 from app.models.conversation import Conversation
+from app.models.message import Message
 
 def test_process_incoming_new_customer(app, mock_db_client, mocker):
     """
@@ -305,3 +306,236 @@ def test_process_incoming_new_conversation_assigns_agents_round_robin(app, mock_
 def test_process_incoming_message_rejects_empty_phone(app, mock_db_client, mocker):
     with pytest.raises(ValueError, match="Phone number is required"):
         WhatsAppService.process_incoming_message(phone="", name="Ghost", text="Boo")
+
+def test_process_status_update_broadcasts_over_websocket(app, mock_db_client, mocker):
+    mock_emit = mocker.patch("app.core.socket_events.socketio.emit")
+
+    customer = Customer(phone_hash=hash_phone("999"), real_phone_number_encrypted=encrypt_phone("999"), masked_id="L-status")
+    mock_db_client.collection("customers").document(customer.id).set(customer.to_dict())
+    conversation = Conversation(customer_id=customer.id)
+    mock_db_client.collection("conversations").document(conversation.id).set(conversation.to_dict())
+
+    msg = Message(
+        conversation_id=conversation.id, sender_type="AGENT", message_type="TEXT",
+        direction="OUTBOUND", delivery_status="SENT", meta_message_id="wamid.status-test"
+    )
+    mock_db_client.collection("messages").document(msg.id).set(msg.to_dict())
+
+    WhatsAppService.process_status_update(meta_message_id="wamid.status-test", status="delivered")
+
+    mock_emit.assert_called_once()
+    event_name, payload = mock_emit.call_args[0]
+    assert event_name == "message_status_updated"
+    assert payload == {
+        "conversation_id": conversation.id,
+        "message_id": msg.id,
+        "delivery_status": "DELIVERED"
+    }
+
+def test_process_status_update_unknown_meta_message_id_is_a_noop(app, mock_db_client, mocker):
+    mock_emit = mocker.patch("app.core.socket_events.socketio.emit")
+    WhatsAppService.process_status_update(meta_message_id="wamid.nonexistent", status="delivered")
+    mock_emit.assert_not_called()
+
+def test_is_within_business_hours_returns_true_when_unconfigured():
+    from app.services.whatsapp_service import _is_within_business_hours
+    assert _is_within_business_hours({}) is True
+
+def test_is_within_business_hours_within_window():
+    from app.services.whatsapp_service import _is_within_business_hours
+    from datetime import datetime, timezone
+    settings = {"business_hours_start": "09:00", "business_hours_end": "17:00", "timezone": "UTC"}
+    noon_utc = datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc)  # Monday
+    assert _is_within_business_hours(settings, now=noon_utc) is True
+
+def test_is_within_business_hours_outside_window():
+    from app.services.whatsapp_service import _is_within_business_hours
+    from datetime import datetime, timezone
+    settings = {"business_hours_start": "09:00", "business_hours_end": "17:00", "timezone": "UTC"}
+    late_night_utc = datetime(2026, 1, 5, 22, 0, tzinfo=timezone.utc)
+    assert _is_within_business_hours(settings, now=late_night_utc) is False
+
+def test_is_within_business_hours_converts_timezone():
+    from app.services.whatsapp_service import _is_within_business_hours
+    from datetime import datetime, timezone
+    # 09:00 UTC == 14:30 IST -- within a 09:00-17:00 IST business day, even
+    # though the raw UTC hour (9) looks like it could be borderline.
+    settings = {"business_hours_start": "09:00", "business_hours_end": "17:00", "timezone": "Asia/Kolkata"}
+    utc_time = datetime(2026, 1, 5, 9, 0, tzinfo=timezone.utc)
+    assert _is_within_business_hours(settings, now=utc_time) is True
+
+def test_is_within_business_hours_overnight_window():
+    from app.services.whatsapp_service import _is_within_business_hours
+    from datetime import datetime, timezone
+    settings = {"business_hours_start": "22:00", "business_hours_end": "06:00", "timezone": "UTC"}
+    assert _is_within_business_hours(settings, now=datetime(2026, 1, 5, 23, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_business_hours(settings, now=datetime(2026, 1, 5, 3, 0, tzinfo=timezone.utc)) is True
+    assert _is_within_business_hours(settings, now=datetime(2026, 1, 5, 12, 0, tzinfo=timezone.utc)) is False
+
+def test_process_incoming_uses_configured_greeting_message(app, mock_db_client, mocker, monkeypatch):
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_ACCESS_TOKEN", "fake_token")
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_PHONE_NUMBER_ID", "12345")
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.return_value = {"messages": [{"id": "wamid.greeting"}]}
+
+    mock_db_client.collection("business_settings").document("global_config").set({
+        "first_greeting_message": "Welcome to TutorSolve! We'll be right with you."
+    })
+
+    WhatsAppService.process_incoming_message(phone="16505550001", name="Greeted", text="hi")
+
+    convs = list(mock_db_client.collection("conversations").stream())
+    conv_id = convs[0].id
+    msgs = list(mock_db_client.collection("messages").where("conversation_id", "==", conv_id).stream())
+    texts = [m.to_dict().get("text_body") for m in msgs]
+    assert "Welcome to TutorSolve! We'll be right with you." in texts
+
+def test_process_incoming_sends_out_of_office_when_outside_hours(app, mock_db_client, mocker, monkeypatch):
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_ACCESS_TOKEN", "fake_token")
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_PHONE_NUMBER_ID", "12345")
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value.status_code = 200
+    mock_post.return_value.json.return_value = {"messages": [{"id": "wamid.ooo"}]}
+
+    mocker.patch("app.services.whatsapp_service._is_within_business_hours", return_value=False)
+    mock_db_client.collection("business_settings").document("global_config").set({
+        "out_of_office_message": "We're closed -- back at 9am!"
+    })
+
+    WhatsAppService.process_incoming_message(phone="16505550002", name="AfterHours", text="hi")
+
+    convs = list(mock_db_client.collection("conversations").stream())
+    conv_id = convs[0].id
+    msgs = list(mock_db_client.collection("messages").where("conversation_id", "==", conv_id).stream())
+    texts = [m.to_dict().get("text_body") for m in msgs]
+    assert "We're closed -- back at 9am!" in texts
+    assert not any(t and "Welcome" in t for t in texts)
+
+def test_process_incoming_sends_nothing_when_outside_hours_and_no_out_of_office_configured(app, mock_db_client, mocker):
+    mocker.patch("app.services.whatsapp_service._is_within_business_hours", return_value=False)
+
+    WhatsAppService.process_incoming_message(phone="16505550003", name="Silent", text="hi")
+
+    convs = list(mock_db_client.collection("conversations").stream())
+    conv_id = convs[0].id
+    msgs = list(mock_db_client.collection("messages").where("conversation_id", "==", conv_id).stream())
+    # Only the original inbound customer message -- no automated reply at all.
+    assert len(msgs) == 1
+    assert msgs[0].to_dict().get("sender_type") == "CUSTOMER"
+
+def test_process_incoming_round_robin_disabled_leaves_conversation_unassigned(app, mock_db_client, mocker):
+    from app.models.user import User
+
+    agent = User(
+        id="agent-rr", full_name="RR Agent", email="rr@test.com",
+        password_hash="x", role="AGENT", system_status="ACTIVE", agent_status="ONLINE"
+    )
+    mock_db_client.collection("users").document(agent.id).set(agent.to_dict())
+    mock_db_client.collection("business_settings").document("global_config").set({"round_robin_enabled": False})
+
+    WhatsAppService.process_incoming_message(phone="16505550004", name="Manual", text="hi")
+
+    convs = list(mock_db_client.collection("conversations").stream())
+    assert convs[0].to_dict().get("assigned_agent_id") is None
+
+def test_process_incoming_round_robin_defaults_enabled_without_settings_doc(app, mock_db_client, mocker):
+    from app.models.user import User
+
+    agent = User(
+        id="agent-default", full_name="Default Agent", email="default@test.com",
+        password_hash="x", role="AGENT", system_status="ACTIVE", agent_status="ONLINE"
+    )
+    mock_db_client.collection("users").document(agent.id).set(agent.to_dict())
+
+    WhatsAppService.process_incoming_message(phone="16505550005", name="Auto", text="hi")
+
+    convs = list(mock_db_client.collection("conversations").stream())
+    assert convs[0].to_dict().get("assigned_agent_id") == "agent-default"
+
+def test_process_status_update_ignores_unrecognized_status_value(app, mock_db_client, mocker):
+    mock_emit = mocker.patch("app.core.socket_events.socketio.emit")
+
+    customer = Customer(phone_hash=hash_phone("998"), real_phone_number_encrypted=encrypt_phone("998"), masked_id="L-status2")
+    mock_db_client.collection("customers").document(customer.id).set(customer.to_dict())
+    conversation = Conversation(customer_id=customer.id)
+    mock_db_client.collection("conversations").document(conversation.id).set(conversation.to_dict())
+
+    msg = Message(
+        conversation_id=conversation.id, sender_type="AGENT", message_type="TEXT",
+        direction="OUTBOUND", delivery_status="SENT", meta_message_id="wamid.weird-status"
+    )
+    mock_db_client.collection("messages").document(msg.id).set(msg.to_dict())
+
+    WhatsAppService.process_status_update(meta_message_id="wamid.weird-status", status="deleted")
+
+    mock_emit.assert_not_called()
+    unchanged = mock_db_client.collection("messages").document(msg.id).get().to_dict()
+    assert unchanged["delivery_status"] == "SENT"
+
+def test_build_message_preview_uses_text_when_present():
+    from app.services.whatsapp_service import _build_message_preview
+    assert _build_message_preview("Hello there", "DOCUMENT") == "Hello there"
+
+def test_build_message_preview_truncates_long_text():
+    from app.services.whatsapp_service import _build_message_preview
+    long_text = "x" * 100
+    assert _build_message_preview(long_text, "TEXT") == long_text[:50]
+
+def test_build_message_preview_falls_back_to_friendly_label_per_type():
+    from app.services.whatsapp_service import _build_message_preview
+    assert "Document" in _build_message_preview(None, "DOCUMENT")
+    assert "Photo" in _build_message_preview("", "IMAGE")
+    assert "Video" in _build_message_preview(None, "VIDEO")
+    assert "Audio" in _build_message_preview(None, "AUDIO")
+    # Never the raw, ugly bracketed type the previous implementation produced.
+    assert "[DOCUMENT]" not in _build_message_preview(None, "DOCUMENT")
+    assert "[IMAGE]" not in _build_message_preview(None, "IMAGE")
+
+def test_build_message_preview_never_returns_empty_string():
+    from app.services.whatsapp_service import _build_message_preview
+    assert _build_message_preview("", "TEXT") != ""
+    assert _build_message_preview(None, "TEXT") != ""
+
+def test_process_incoming_document_without_caption_gets_friendly_preview(app, mock_db_client, mocker):
+    WhatsAppService.process_incoming_message(
+        phone="16505559001", name="Doc Sender", text="",
+        meta_message_id="wamid.doc1", media_id="1234567890", mime_type="application/pdf", msg_type="document"
+    )
+
+    conv = list(mock_db_client.collection("conversations").stream())[0].to_dict()
+    assert conv["last_message_preview"] not in ("", "[DOCUMENT]")
+    assert "Document" in conv["last_message_preview"]
+
+def test_send_media_message_without_caption_gets_friendly_preview(app, mock_db_client, mocker, monkeypatch):
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_ACCESS_TOKEN", "fake_token")
+    monkeypatch.setattr("app.services.whatsapp_service.WHATSAPP_PHONE_NUMBER_ID", "12345")
+
+    upload_response = mocker.Mock(status_code=200)
+    upload_response.json.return_value = {"id": "999888777"}
+    upload_response.raise_for_status.return_value = None
+
+    send_response = mocker.Mock(status_code=200)
+    send_response.json.return_value = {"messages": [{"id": "wamid.media1"}]}
+    send_response.raise_for_status.return_value = None
+
+    mocker.patch("requests.post", side_effect=[upload_response, send_response])
+
+    customer = Customer(phone_hash=hash_phone("777"), real_phone_number_encrypted=encrypt_phone("777"), masked_id="L-media")
+    mock_db_client.collection("customers").document(customer.id).set(customer.to_dict())
+    conversation = Conversation(customer_id=customer.id)
+    mock_db_client.collection("conversations").document(conversation.id).set(conversation.to_dict())
+
+    success, error = WhatsAppService.send_media_message(
+        conversation_id=conversation.id,
+        file_bytes=b"fake-pdf-bytes",
+        mime_type="application/pdf",
+        filename="report.pdf",
+        text="",
+        sender_id="agent-1"
+    )
+
+    assert success is True, error
+    refreshed = mock_db_client.collection("conversations").document(conversation.id).get().to_dict()
+    assert refreshed["last_message_preview"] not in ("", "[DOCUMENT]")
+    assert "Document" in refreshed["last_message_preview"]

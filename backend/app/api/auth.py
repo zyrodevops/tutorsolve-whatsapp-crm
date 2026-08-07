@@ -20,11 +20,19 @@ def login():
     except ValidationError as err:
         return jsonify({"status": "error", "message": "Invalid input", "errors": err.messages}), 400
 
-    result = AuthService.authenticate_user(credentials["email"], credentials["password"], credentials.get("remember_me", False))
-    
+    result, error = AuthService.authenticate_user(credentials["email"], credentials["password"], credentials.get("remember_me", False))
+
+    if error == "account_deactivated":
+        return jsonify({
+            "status": "error",
+            "message": "This account has been deactivated. Contact an administrator.",
+            "code": "ACCOUNT_DEACTIVATED"
+        }), 403
+
     if not result:
         return jsonify({"status": "error", "message": "Invalid email or password"}), 401
-        
+
+
     token = result.pop("token")
     refresh_token = result.pop("refresh_token")
     

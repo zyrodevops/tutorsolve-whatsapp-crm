@@ -2,23 +2,53 @@ import React, { useState } from 'react';
 import { Info, User, Clock, Copy, Check } from 'lucide-react';
 import type { Conversation } from '@/types/inbox';
 import type { CurrentUser } from '@/types/auth';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 interface CrmSidebarProps {
   conversation: Conversation | null | undefined;
   currentUser: CurrentUser;
+  onAddNote?: () => void;
+  onStatusChange?: (conversationId: string, newStatus: Conversation['status']) => void;
+  onTagsChange?: (conversationId: string, tags: string[]) => void;
 }
 
 import { API_URL } from '@/lib/config';
 
-export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProps) {
+interface MasterTag {
+  id: string;
+  name: string;
+  color_hex: string;
+}
+
+export default function CrmSidebar({ conversation, currentUser, onAddNote, onStatusChange, onTagsChange }: CrmSidebarProps) {
   const [copied, setCopied] = useState(false);
   const [isAddingTag, setIsAddingTag] = useState(false);
-  const [newTag, setNewTag] = useState('');
   const [localTags, setLocalTags] = useState<string[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [masterTags, setMasterTags] = useState<MasterTag[]>([]);
+
+  React.useEffect(() => {
+    const fetchMasterTags = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/tags`, { credentials: 'include' });
+        if (res.ok) {
+          const body = await res.json();
+          if (Array.isArray(body.data)) {
+            setMasterTags(body.data);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch tags', err);
+      }
+    };
+    fetchMasterTags();
+  }, []);
   const [revealedNumber, setRevealedNumber] = useState<string | null>(null);
   const [isRevealing, setIsRevealing] = useState(false);
   const [revealError, setRevealError] = useState('');
+  const [isMarkingResolved, setIsMarkingResolved] = useState(false);
+  const [resolveError, setResolveError] = useState('');
+  const [showResolveConfirm, setShowResolveConfirm] = useState(false);
 
   // Sync localTags when conversation changes
   React.useEffect(() => {
@@ -35,6 +65,8 @@ export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProp
     setRevealedNumber(null);
     setIsRevealing(false);
     setRevealError('');
+    setResolveError('');
+    setShowResolveConfirm(false);
   }, [conversation?.id]);
 
   const handleUpdateTags = async (updatedTags: string[]) => {
@@ -49,8 +81,7 @@ export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProp
       });
       if (res.ok) {
         setLocalTags(updatedTags);
-        // Note: the parent component should ideally re-fetch or be updated via websocket, 
-        // but local state gives immediate feedback
+        onTagsChange?.(conversation.id, updatedTags);
       }
     } catch (err) {
       console.error('Failed to update tags', err);
@@ -59,16 +90,10 @@ export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProp
     }
   };
 
-  const handleAddTag = () => {
-    if (!newTag.trim()) {
-      setIsAddingTag(false);
-      return;
+  const handlePickTag = (tagName: string) => {
+    if (!localTags.includes(tagName)) {
+      handleUpdateTags([...localTags, tagName]);
     }
-    const tag = newTag.trim();
-    if (!localTags.includes(tag)) {
-      handleUpdateTags([...localTags, tag]);
-    }
-    setNewTag('');
     setIsAddingTag(false);
   };
 
@@ -94,6 +119,31 @@ export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProp
     }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleMarkResolved = async () => {
+    if (!conversation) return;
+    setShowResolveConfirm(false);
+    setIsMarkingResolved(true);
+    setResolveError('');
+    try {
+      const res = await fetch(`${API_URL}/api/conversations/${conversation.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: 'RESOLVED' })
+      });
+      if (res.ok) {
+        onStatusChange?.(conversation.id, 'RESOLVED');
+      } else {
+        const data = await res.json().catch(() => null);
+        setResolveError(data?.message || 'Failed to mark resolved');
+      }
+    } catch (err) {
+      setResolveError('Network error');
+    } finally {
+      setIsMarkingResolved(false);
+    }
   };
 
   const handleRevealNumber = async () => {
@@ -167,21 +217,34 @@ export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProp
           <h4 className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-3">Quick Actions</h4>
           <div className="grid grid-cols-2 gap-2">
             <button
-              disabled
-              title="Coming soon"
-              className="py-2 px-3 text-xs font-semibold bg-[var(--color-bg-base)] border border-[var(--color-border-subtle)] rounded-lg text-[var(--color-text-muted)] cursor-not-allowed"
+              onClick={onAddNote}
+              disabled={!onAddNote}
+              title={onAddNote ? 'Add an internal note' : 'Not available here'}
+              className="py-2 px-3 text-xs font-semibold bg-[var(--color-bg-base)] border border-[var(--color-border-subtle)] rounded-lg text-[var(--color-text-primary)] hover:border-[var(--color-brand-primary)] hover:text-[var(--color-brand-primary)] transition-colors disabled:text-[var(--color-text-muted)] disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-subtle)] disabled:hover:text-[var(--color-text-muted)]"
             >
               Add Note
             </button>
             <button
-              disabled
-              title="Coming soon"
-              className="py-2 px-3 text-xs font-semibold bg-[var(--color-bg-base)] border border-[var(--color-border-subtle)] rounded-lg text-[var(--color-text-muted)] cursor-not-allowed"
+              onClick={() => setShowResolveConfirm(true)}
+              disabled={isMarkingResolved || conversation.status === 'RESOLVED'}
+              title={conversation.status === 'RESOLVED' ? 'Already resolved' : 'Mark this conversation resolved'}
+              className="py-2 px-3 text-xs font-semibold bg-[var(--color-bg-base)] border border-[var(--color-border-subtle)] rounded-lg text-[var(--color-text-primary)] hover:border-[var(--color-brand-primary)] hover:text-[var(--color-brand-primary)] transition-colors disabled:text-[var(--color-text-muted)] disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-subtle)] disabled:hover:text-[var(--color-text-muted)]"
             >
-              Mark Resolved
+              {isMarkingResolved ? 'Marking...' : 'Mark Resolved'}
             </button>
           </div>
+          {resolveError && <p className="text-[var(--color-status-error)] text-xs mt-2">{resolveError}</p>}
         </div>
+
+        {showResolveConfirm && (
+          <ConfirmModal
+            title="Mark this conversation as resolved?"
+            description="The customer's chat will be marked resolved. You (or anyone else) can still reopen it later by messaging again, but this isn't something to click by accident."
+            confirmLabel="Yes, Mark Resolved"
+            onConfirm={handleMarkResolved}
+            onCancel={() => setShowResolveConfirm(false)}
+          />
+        )}
 
         {/* Tags */}
         <div>
@@ -195,46 +258,53 @@ export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProp
             </button>
           </h4>
           <div className="flex flex-wrap gap-2">
-            {localTags.map(tag => (
-              <span key={tag} className="px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1 group">
-                {tag}
-                <button 
-                  onClick={() => handleRemoveTag(tag)}
-                  disabled={isUpdating}
-                  className="opacity-0 group-hover:opacity-100 text-blue-400 hover:text-blue-700 transition-opacity"
+            {localTags.map(tag => {
+              const color = masterTags.find(t => t.name === tag)?.color_hex ?? '#3B82F6';
+              return (
+                <span
+                  key={tag}
+                  className="pl-2 pr-1.5 py-1 rounded-full text-xs font-semibold bg-[var(--color-bg-base)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] flex items-center gap-1.5 group"
                 >
-                  &times;
-                </button>
-              </span>
-            ))}
+                  <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                  {tag}
+                  <button
+                    onClick={() => handleRemoveTag(tag)}
+                    disabled={isUpdating}
+                    title={`Remove tag "${tag}"`}
+                    aria-label={`Remove tag "${tag}"`}
+                    className="opacity-0 group-hover:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] transition-opacity"
+                  >
+                    &times;
+                  </button>
+                </span>
+              );
+            })}
             {localTags.length === 0 && !isAddingTag && (
               <span className="text-xs text-[var(--color-text-muted)] italic">No tags assigned</span>
             )}
           </div>
           {isAddingTag && (
-            <div className="mt-2 flex gap-2">
-              <input 
-                autoFocus
-                type="text" 
-                value={newTag}
-                onChange={(e) => setNewTag(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleAddTag();
-                  if (e.key === 'Escape') {
-                    setIsAddingTag(false);
-                    setNewTag('');
-                  }
-                }}
-                className="flex-1 px-2 py-1 text-xs border rounded focus:outline-none focus:border-[var(--color-brand-primary)]" 
-                placeholder="Type tag & Enter"
-              />
-              <button 
-                onClick={handleAddTag}
-                disabled={isUpdating}
-                className="px-2 py-1 text-xs bg-[var(--color-brand-primary)] text-white rounded hover:bg-[var(--color-brand-hover)] disabled:opacity-50"
-              >
-                Save
-              </button>
+            <div className="mt-2 p-2 bg-[var(--color-bg-base)] border border-[var(--color-border-subtle)] rounded-lg flex flex-wrap gap-2">
+              {(() => {
+                const availableTags = masterTags.filter(t => !localTags.includes(t.name));
+                if (masterTags.length === 0) {
+                  return <span className="text-xs text-[var(--color-text-muted)] italic">No tags configured yet.</span>;
+                }
+                if (availableTags.length === 0) {
+                  return <span className="text-xs text-[var(--color-text-muted)] italic">All available tags are already applied.</span>;
+                }
+                return availableTags.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => handlePickTag(t.name)}
+                    disabled={isUpdating}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] hover:border-[var(--color-brand-primary)] transition-colors disabled:opacity-50"
+                  >
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: t.color_hex }} />
+                    {t.name}
+                  </button>
+                ));
+              })()}
             </div>
           )}
         </div>
@@ -250,6 +320,19 @@ export default function CrmSidebar({ conversation, currentUser }: CrmSidebarProp
             }`}>
               {conversation.status}
             </span>
+          </div>
+        </div>
+
+        {/* Assigned Agent */}
+        <div>
+          <h4 className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-3">Assigned Agent</h4>
+          <div className="flex items-center gap-2 text-sm font-medium bg-[var(--color-bg-base)] p-3 rounded-xl border border-[var(--color-border-subtle)]">
+            <User size={16} className="text-[var(--color-text-muted)]" />
+            {conversation.assigned_agent_name ? (
+              <span className="text-[var(--color-text-primary)]">{conversation.assigned_agent_name}</span>
+            ) : (
+              <span className="text-[var(--color-text-muted)] italic">Unassigned</span>
+            )}
           </div>
         </div>
 
