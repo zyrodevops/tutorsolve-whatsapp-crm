@@ -1,22 +1,34 @@
 from datetime import datetime, timezone
 import uuid
-from app.db.database import db
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, DateTime
+from dataclasses import dataclass, field
+from typing import Optional
 
 def generate_uuid():
     return str(uuid.uuid4())
 
-class Customer(db.Model):
-    __tablename__ = "customers"
+@dataclass
+class Customer:
+    phone_hash: str
+    real_phone_number_encrypted: str
+    masked_id: str
+    id: str = field(default_factory=generate_uuid)
+    whatsapp_name: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    about: Optional[str] = None
+    external_crm_id: Optional[str] = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=generate_uuid)
-    phone_hash: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    real_phone_number_encrypted: Mapped[str] = mapped_column(String, nullable=False)
-    masked_id: Mapped[str] = mapped_column(String, nullable=False)
-    whatsapp_name: Mapped[str] = mapped_column(String, nullable=True)
-    profile_photo_url: Mapped[str] = mapped_column(String, nullable=True)
-    about: Mapped[str] = mapped_column(String, nullable=True)
-    external_crm_id: Mapped[str] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "phone_hash": self.phone_hash,
+            "real_phone_number_encrypted": self.real_phone_number_encrypted,
+            "masked_id": self.masked_id,
+            "whatsapp_name": self.whatsapp_name,
+            "profile_photo_url": self.profile_photo_url,
+            "about": self.about,
+            "external_crm_id": self.external_crm_id,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at
+        }

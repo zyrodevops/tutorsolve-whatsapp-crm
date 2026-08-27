@@ -1,13 +1,15 @@
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
 import uuid
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, DateTime
-from app.db.database import db
 
-class Tag(db.Model):
-    __tablename__ = 'tags'
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    color_hex: Mapped[str] = mapped_column(String(7), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+@dataclass
+class Tag:
+    name: str
+    color_hex: str
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "color_hex": self.color_hex
+        }

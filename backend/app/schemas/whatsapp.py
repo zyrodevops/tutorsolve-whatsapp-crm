@@ -11,6 +11,10 @@ class MessageSchema(Schema):
     timestamp = fields.Str(required=True)
     type = fields.Str(required=True)
     text = fields.Nested(TextBodySchema, required=False)
+    image = fields.Dict(required=False)
+    video = fields.Dict(required=False)
+    document = fields.Dict(required=False)
+    audio = fields.Dict(required=False)
     class Meta:
         unknown = EXCLUDE
 

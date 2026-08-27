@@ -41,6 +41,46 @@ describe('Login Page', () => {
     });
   });
 
+  it('shows the distinct deactivated-account message, not a generic credentials error', async () => {
+    (global.fetch as jest.Mock).mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        status: 'error',
+        message: 'This account has been deactivated. Contact an administrator.',
+        code: 'ACCOUNT_DEACTIVATED',
+      }),
+    });
+
+    render(<LoginPage />)
+
+    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'deactivated@test.com' } });
+    fireEvent.change(screen.getByLabelText(/Password/i), { target: { value: 'correctpassword' } });
+    fireEvent.click(screen.getByRole('button', { name: /Sign in/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/deactivated/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/invalid email or password/i)).not.toBeInTheDocument();
+  });
+
+  it('shows a loading spinner on the submit button while the request is in flight', async () => {
+    let resolveFetch: (value: unknown) => void;
+    (global.fetch as jest.Mock).mockReturnValue(new Promise((resolve) => { resolveFetch = resolve; }));
+
+    render(<LoginPage />)
+
+    fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'test@test.com' } });
+    fireEvent.change(screen.getByLabelText(/Password/i), { target: { value: 'password123' } });
+    fireEvent.click(screen.getByRole('button', { name: /Sign in/i }));
+
+    const submitButton = screen.getByRole('button', { name: /Sign in/i });
+    await waitFor(() => {
+      expect(submitButton.querySelector('.animate-spin')).toBeInTheDocument();
+    });
+
+    resolveFetch!({ ok: true, json: async () => ({ status: 'success', data: { user: { role: 'AGENT' } } }) });
+  });
+
   it('redirects to admin team page for ADMIN role', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
       ok: true,

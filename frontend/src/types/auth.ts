@@ -3,4 +3,5 @@ export interface CurrentUser {
   email: string;
   full_name: string;
   role: 'ADMIN' | 'MANAGER' | 'AGENT';
+  agent_status?: 'ONLINE' | 'BUSY' | 'OFFLINE';
 }

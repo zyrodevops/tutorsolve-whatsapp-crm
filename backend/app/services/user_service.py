@@ -1,41 +1,40 @@
 import logging
-from app.db.database import db
+import os
+from google.cloud.firestore_v1 import Query
+from app.db.firebase import db
 from app.models.user import User
-from app.models.conversation import Conversation
-from app.models.message import Message
-from app.core.security import hash_password
+from app.core.security import hash_password, create_password_reset_token
 from app.services.email_service import EmailService
-from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
 class UserService:
     @staticmethod
     def create_user(user_payload: dict) -> tuple[dict | None, str | None]:
-        """
-        Creates a new user and emails them their temporary password.
-        Returns (user_dict, None) on success.
-        Returns (None, error_message) on failure.
-        """
         raw_password = user_payload["password"]
-        try:
-            user = User(
-                full_name=user_payload["full_name"],
-                email=user_payload["email"],
-                password_hash=hash_password(raw_password),
-                role=user_payload["role"]
-            )
-            db.session.add(user)
-            db.session.commit()
-        except IntegrityError:
-            db.session.rollback()
+        
+        users_ref = db.client.collection("users")
+        existing = list(users_ref.where("email", "==", user_payload["email"]).limit(1).stream())
+        if existing:
             return None, "Email already exists"
+            
+        user = User(
+            full_name=user_payload["full_name"],
+            email=user_payload["email"],
+            password_hash=hash_password(raw_password),
+            role=user_payload["role"]
+        )
+        
+        try:
+            users_ref.document(user.id).set(user.to_dict())
         except Exception:
-            db.session.rollback()
             logger.exception("Unexpected error creating user %s", user_payload.get("email"))
             return None, "Failed to create user"
 
-        email_sent = bool(EmailService.send_welcome_email(user.email, user.full_name, raw_password))
+        setup_token = create_password_reset_token(user.id)
+        frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+        setup_link = f"{frontend_url}/reset-password?token={setup_token}"
+        email_sent = bool(EmailService.send_welcome_email(user.email, user.full_name, setup_link))
         if not email_sent:
             logger.warning("User %s was created but the welcome email failed to send", user.email)
 
@@ -49,48 +48,44 @@ class UserService:
 
     @staticmethod
     def get_all_users(current_user_id: str = None) -> list[dict]:
-        """
-        Retrieves all users, omitting sensitive information.
-        Flags the current user so the frontend knows not to allow self-deletion.
-        """
-        users = db.session.execute(db.select(User).order_by(User.created_at.desc())).scalars().all()
-        return [
-            {
-                "id": user.id,
-                "full_name": user.full_name,
-                "email": user.email,
-                "role": user.role,
-                "system_status": user.system_status,
-                "created_at": user.created_at.isoformat(),
-                "is_current_user": user.id == current_user_id
-            }
-            for user in users
-        ]
+        users_ref = db.client.collection("users").order_by("created_at", direction=Query.DESCENDING)
+        users = users_ref.stream()
+        result = []
+        for doc in users:
+            u = doc.to_dict()
+            result.append({
+                "id": u.get("id"),
+                "full_name": u.get("full_name"),
+                "email": u.get("email"),
+                "role": u.get("role"),
+                "system_status": u.get("system_status"),
+                "created_at": u.get("created_at").isoformat() if hasattr(u.get("created_at"), "isoformat") else str(u.get("created_at")),
+                "is_current_user": u.get("id") == current_user_id
+            })
+        return result
 
     @staticmethod
     def delete_user(user_id: str) -> tuple[bool, str | None]:
-        """
-        Deletes a user by ID.
-        Returns (True, None) on success, or (False, error_message) if the user
-        doesn't exist or still has conversations/messages referencing it.
-        """
-        user = db.session.get(User, user_id)
-        if not user:
+        user_ref = db.client.collection("users").document(user_id)
+        if not user_ref.get().exists:
             return False, "not_found"
 
-        has_references = db.session.execute(
-            db.select(Conversation.id).filter_by(assigned_agent_id=user_id)
-        ).first() or db.session.execute(
-            db.select(Message.id).filter_by(sender_id=user_id)
-        ).first()
+        has_references = False
+        convs = list(db.client.collection("conversations").where("assigned_agent_id", "==", user_id).limit(1).stream())
+        if convs:
+            has_references = True
+            
+        if not has_references:
+            msgs = list(db.client.collection("messages").where("sender_id", "==", user_id).limit(1).stream())
+            if msgs:
+                has_references = True
+
         if has_references:
             return False, "has_references"
 
         try:
-            db.session.delete(user)
-            db.session.commit()
+            user_ref.delete()
             return True, None
         except Exception:
-            db.session.rollback()
             logger.exception("Failed to delete user %s", user_id)
             return False, "delete_failed"

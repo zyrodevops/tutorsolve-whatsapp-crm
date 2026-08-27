@@ -1,0 +1,26 @@
+# Secrets -- must never be baked into the image; injected at runtime instead.
+.env
+.env.*
+!.env.example
+
+.venv
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+.git
+.gitignore
+
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+instance/
+*.sqlite3
+
+.vscode/
+.idea/
+.DS_Store
+
+README.md

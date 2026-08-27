@@ -1,29 +1,142 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { MessageSquare, Send, AlertCircle } from 'lucide-react';
+import { MessageSquare, Send, AlertCircle, ChevronLeft, Paperclip, X, Zap } from 'lucide-react';
 import { API_URL } from '@/lib/config';
-import type { Message, NewMessagePayload } from '@/types/inbox';
+import Linkify from '@/components/ui/Linkify';
+import MessageStatusTicks from '@/components/inbox/MessageStatusTicks';
+import type { Message, NewMessagePayload, Conversation } from '@/types/inbox';
+import type { MessageStatusUpdatePayload } from '@/context/InboxContext';
 
 interface MessageThreadProps {
   conversationId: string | null;
+  conversation?: Conversation | null;
   newMessage?: NewMessagePayload | null;
+  messageStatusUpdate?: MessageStatusUpdatePayload | null;
+  onBack?: () => void;
+  // Optional controlled note-mode pair, so a sibling component (e.g. the CRM
+  // sidebar's "Add Note" quick action) can trigger note mode from outside.
+  // Falls back to internal state when not provided, so standalone usage
+  // (including existing tests) is unaffected.
+  isNoteMode?: boolean;
+  onNoteModeChange?: (value: boolean) => void;
 }
 
 const NEAR_BOTTOM_THRESHOLD_PX = 150;
 
-export default function MessageThread({ conversationId, newMessage }: MessageThreadProps) {
+function formatTimeRemaining(msRemaining: number): string {
+  const totalMinutes = Math.floor(msRemaining / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}h ${minutes}m left` : `${minutes}m left`;
+}
+
+// Mirrors the server-side cap (MAX_UPLOAD_SIZE_BYTES in backend/app/core/config.py) so
+// oversized files are rejected instantly instead of round-tripping to the server first.
+const MAX_ATTACHMENT_SIZE_BYTES = 16 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_MIME_PREFIXES = ['image/', 'video/', 'audio/'];
+const ALLOWED_DOCUMENT_MIME_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/plain',
+];
+const ATTACHMENT_ACCEPT = [...ALLOWED_ATTACHMENT_MIME_PREFIXES.map(p => `${p}*`), ...ALLOWED_DOCUMENT_MIME_TYPES].join(',');
+
+function isAllowedAttachmentType(mimeType: string): boolean {
+  return ALLOWED_ATTACHMENT_MIME_PREFIXES.some(prefix => mimeType.startsWith(prefix))
+    || ALLOWED_DOCUMENT_MIME_TYPES.includes(mimeType);
+}
+
+export default function MessageThread({ conversationId, conversation, newMessage, messageStatusUpdate, onBack, isNoteMode: controlledNoteMode, onNoteModeChange }: MessageThreadProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [sendError, setSendError] = useState('');
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const forceScrollRef = useRef(false);
+  const [internalNoteMode, setInternalNoteMode] = useState(false);
+  const isNoteMode = controlledNoteMode ?? internalNoteMode;
+  const setIsNoteMode = onNoteModeChange ?? setInternalNoteMode;
+  const [attachment, setAttachment] = useState<File | null>(null);
+  const [attachmentError, setAttachmentError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isWindowClosed, setIsWindowClosed] = useState(false);
+  const [timeRemainingLabel, setTimeRemainingLabel] = useState<string | null>(null);
+  const [quickReplies, setQuickReplies] = useState<{id: string, shortcut: string, message: string}[]>([]);
+  const [templates, setTemplates] = useState<{id: string, template_name: string}[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+
+  useEffect(() => {
+    const fetchTemplates = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/meta-templates`, { credentials: 'include' });
+        if (res.ok) {
+          const body = await res.json();
+          setTemplates(body.data);
+          if (body.data.length > 0) {
+            setSelectedTemplate((prev) => prev || body.data[0].template_name);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch templates', err);
+      }
+    };
+    fetchTemplates();
+  }, []);
+
+  useEffect(() => {
+    const fetchQuickReplies = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/admin/quick-replies`, { credentials: 'include' });
+        if (res.ok) {
+          const body = await res.json();
+          setQuickReplies(body.data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch quick replies', err);
+      }
+    };
+    fetchQuickReplies();
+  }, []);
+
+  // Check window expiry
+  useEffect(() => {
+    if (!conversation?.whatsapp_window_expires_at) {
+      setIsWindowClosed(false);
+      setTimeRemainingLabel(null);
+      return;
+    }
+
+    const checkExpiry = () => {
+      const expiresAt = new Date(conversation.whatsapp_window_expires_at as string);
+      if (Number.isNaN(expiresAt.getTime())) {
+        // Fail closed: an unparseable timestamp must not be treated as "window
+        // still open" (new Date() > Invalid Date is always false), or the
+        // 24-hour compliance rule would silently never lock the input.
+        console.error('Unparseable whatsapp_window_expires_at, treating window as closed:', conversation.whatsapp_window_expires_at);
+        setIsWindowClosed(true);
+        setTimeRemainingLabel(null);
+        return;
+      }
+      const msRemaining = expiresAt.getTime() - new Date().getTime();
+      setIsWindowClosed(msRemaining <= 0);
+      setTimeRemainingLabel(msRemaining > 0 ? formatTimeRemaining(msRemaining) : null);
+    };
+    
+    checkExpiry();
+    const interval = setInterval(checkExpiry, 60000); // Check every minute
+    return () => clearInterval(interval);
+  }, [conversation?.whatsapp_window_expires_at]);
 
   useEffect(() => {
     if (!conversationId) return;
 
     const fetchMessages = async () => {
+      setIsLoadingMessages(true);
       try {
         const res = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
           credentials: 'include'
@@ -34,6 +147,8 @@ export default function MessageThread({ conversationId, newMessage }: MessageThr
         }
       } catch (err) {
         console.error('Failed to fetch messages', err);
+      } finally {
+        setIsLoadingMessages(false);
       }
     };
 
@@ -47,6 +162,8 @@ export default function MessageThread({ conversationId, newMessage }: MessageThr
   if (conversationId !== lastConversationId) {
     setLastConversationId(conversationId);
     setSendError('');
+    setAttachment(null);
+    setAttachmentError('');
   }
 
   // Handle incoming real-time messages. Applied during render (guarded by the
@@ -61,6 +178,22 @@ export default function MessageThread({ conversationId, newMessage }: MessageThr
         if (prev.find(m => m.id === newMessage.message.id)) return prev;
         return [...prev, newMessage.message];
       });
+    }
+  }
+
+  // Apply live delivery/read-receipt updates during render (same pattern as
+  // the newMessage handling above), guarded so a given status payload is
+  // only ever applied once even though the prop reference stays stable
+  // across unrelated re-renders.
+  const [lastAppliedStatusUpdate, setLastAppliedStatusUpdate] = useState<MessageStatusUpdatePayload | null | undefined>(undefined);
+  if (messageStatusUpdate !== lastAppliedStatusUpdate) {
+    setLastAppliedStatusUpdate(messageStatusUpdate);
+    if (messageStatusUpdate && messageStatusUpdate.conversation_id === conversationId) {
+      setMessages(prev => prev.map(m =>
+        m.id === messageStatusUpdate.message_id
+          ? { ...m, delivery_status: messageStatusUpdate.delivery_status }
+          : m
+      ));
     }
   }
 
@@ -84,24 +217,64 @@ export default function MessageThread({ conversationId, newMessage }: MessageThr
     isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_THRESHOLD_PX;
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] || null;
+    setAttachmentError('');
+    setAttachment(null);
+    if (!file) return;
+
+    if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+      setAttachmentError(`"${file.name}" is too large. Max size is ${MAX_ATTACHMENT_SIZE_BYTES / (1024 * 1024)}MB.`);
+      e.target.value = '';
+      return;
+    }
+    if (!isAllowedAttachmentType(file.type)) {
+      setAttachmentError(`Unsupported file type: ${file.type || 'unknown'}.`);
+      e.target.value = '';
+      return;
+    }
+    setAttachment(file);
+  };
+
   const handleSend = async () => {
-    if (!inputText.trim() || isSending || !conversationId) return;
+    if ((!inputText.trim() && !attachment) || isSending || !conversationId) return;
     setIsSending(true);
     setSendError('');
 
+    const endpoint = isNoteMode 
+      ? `${API_URL}/api/conversations/${conversationId}/notes`
+      : `${API_URL}/api/conversations/${conversationId}/messages`;
+
+    const isMultipart = !!attachment && !isNoteMode;
+    let bodyPayload: string | FormData;
+    
+    if (isMultipart) {
+      const formData = new FormData();
+      formData.append('file', attachment);
+      formData.append('text', inputText);
+      bodyPayload = formData;
+    } else {
+      bodyPayload = JSON.stringify({ text: inputText });
+    }
+
     try {
-      const res = await fetch(`${API_URL}/api/conversations/${conversationId}/messages`, {
+      const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: isMultipart ? undefined : { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ text: inputText })
+        body: bodyPayload
       });
 
       if (res.ok) {
         const body = await res.json();
         forceScrollRef.current = true;
-        setMessages(prev => [...prev, body.data]);
+        // The server's socketio.emit fires before this response returns and
+        // is broadcast to the sender too, so the echo can beat this response
+        // back to the browser -- don't add the same message twice.
+        setMessages(prev => prev.find(m => m.id === body.data.id) ? prev : [...prev, body.data]);
         setInputText('');
+        setAttachment(null);
+        if (isNoteMode) setIsNoteMode(false);
       } else {
         const body = await res.json().catch(() => null);
         setSendError(body?.message || 'Message failed to send. Please try again.');
@@ -114,55 +287,133 @@ export default function MessageThread({ conversationId, newMessage }: MessageThr
     }
   };
 
+  const handleSendTemplate = async () => {
+    if (isSending || !conversationId || !selectedTemplate) return;
+    setIsSending(true);
+    setSendError('');
+
+    try {
+      const res = await fetch(`${API_URL}/api/conversations/${conversationId}/messages/template`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ template_name: selectedTemplate })
+      });
+
+      if (res.ok) {
+        const body = await res.json();
+        forceScrollRef.current = true;
+        setMessages(prev => prev.find(m => m.id === body.data.id) ? prev : [...prev, body.data]);
+      } else {
+        const body = await res.json().catch(() => null);
+        setSendError(body?.message || 'Failed to send template.');
+      }
+    } catch (err) {
+      console.error('Failed to send template', err);
+      setSendError('Failed to send template. Check your connection.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   if (!conversationId) {
     return (
-      <div className="flex flex-col h-full items-center justify-center bg-gray-50/50">
-        <div className="text-center text-gray-500">
-          <MessageSquare className="mx-auto mb-4 opacity-30 text-gray-400" size={56} />
-          <p className="text-xl font-semibold text-gray-700">Select a conversation</p>
-          <p className="text-sm text-gray-400 mt-2">Message History will appear here</p>
+      <div className="flex flex-col h-full items-center justify-center bg-[var(--color-bg-base)]">
+        <div className="text-center text-[var(--color-text-secondary)]">
+          <MessageSquare className="mx-auto mb-4 opacity-30 text-[var(--color-text-muted)]" size={56} />
+          <p className="text-xl font-semibold text-[var(--color-text-primary)]">Select a conversation</p>
+          <p className="text-sm text-[var(--color-text-muted)] mt-2">Message History will appear here</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full bg-white relative">
+    <div className="flex flex-col h-full bg-[var(--color-bg-surface)] relative">
       {/* Header */}
-      <div className="p-4 border-b border-[var(--color-border-subtle)] bg-white/80 backdrop-blur-md sticky top-0 z-10 shadow-sm">
-        <h3 className="font-semibold text-gray-800 text-lg">Message History</h3>
+      <div className="p-4 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]/80 backdrop-blur-md sticky top-0 z-10 shadow-sm flex items-center gap-2">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="lg:hidden -ml-2 p-2 rounded-full text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-base)] hover:text-[var(--color-text-primary)] transition-colors flex-shrink-0"
+            title="Back to conversations"
+          >
+            <ChevronLeft size={20} />
+          </button>
+        )}
+        <h3 className="font-semibold text-[var(--color-text-primary)] text-lg">Message History</h3>
+        {timeRemainingLabel && (
+          <span
+            className="ml-auto text-xs font-medium text-[var(--color-text-muted)] bg-[var(--color-bg-base)] px-2.5 py-1 rounded-full flex-shrink-0"
+            title="Time remaining in the 24-hour WhatsApp reply window"
+          >
+            {timeRemainingLabel}
+          </span>
+        )}
       </div>
 
       {/* Thread */}
-      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-6 bg-gray-50/50">
-        <div className="text-center text-xs font-semibold uppercase tracking-widest text-gray-400 my-6">
-          <span className="bg-white px-3 py-1 rounded-full border border-gray-100 shadow-sm">
+      <div ref={scrollContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-6 bg-[var(--color-bg-base)]">
+        <div className="text-center text-xs font-semibold uppercase tracking-widest text-[var(--color-text-muted)] my-6">
+          <span className="bg-[var(--color-bg-surface)] px-3 py-1 rounded-full border border-[var(--color-border-subtle)] shadow-sm">
             Chat Started
           </span>
         </div>
 
         <div className="flex flex-col space-y-4">
-          {messages.map((msg, index) => {
+          {isLoadingMessages ? (
+            <div className="animate-pulse space-y-6 flex flex-col">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className={`flex ${i % 2 === 0 ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`w-2/3 h-16 rounded-2xl ${i % 2 === 0 ? 'bg-emerald-100 rounded-br-none' : 'bg-gray-200 rounded-bl-none'}`}></div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <>
+              {messages.map((msg, index) => {
             const isAgent = msg.sender_type === 'AGENT';
             const msgDate = new Date(msg.timestamp);
             const prevMsgDate = index > 0 ? new Date(messages[index - 1].timestamp) : null;
-
             const showDateSeparator = !prevMsgDate || msgDate.toDateString() !== prevMsgDate.toDateString();
+
+            const isNote = msg.sender_type === 'INTERNAL_NOTE';
 
             return (
               <React.Fragment key={msg.id}>
                 {showDateSeparator && (
                   <div className="flex justify-center my-4">
-                    <span className="bg-white px-3 py-1 rounded-full border border-gray-100 shadow-sm text-xs font-semibold uppercase tracking-widest text-gray-400">
+                    <span className="bg-[var(--color-bg-surface)] px-3 py-1 rounded-full border border-[var(--color-border-subtle)] shadow-sm text-xs font-semibold uppercase tracking-widest text-[var(--color-text-muted)]">
                       {msgDate.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
                     </span>
                   </div>
                 )}
-                <div className={`flex ${isAgent ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[70%] rounded-2xl px-4 py-3 shadow-sm ${isAgent ? 'bg-[var(--color-brand-primary)] text-white rounded-br-none' : 'bg-white border border-gray-200 text-gray-800 rounded-bl-none'}`}>
-                    <p className="text-sm whitespace-pre-wrap">{msg.text_body}</p>
-                    <div className={`text-[10px] mt-1 text-right ${isAgent ? 'text-emerald-100' : 'text-gray-400'}`}>
+                <div className={`flex ${isNote ? 'justify-center' : isAgent ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[70%] rounded-xl px-4 py-3 shadow-sm ${
+                    isNote ? 'bg-yellow-100 border border-yellow-200 text-yellow-900' :
+                    isAgent ? 'bg-[var(--color-brand-primary)] text-white rounded-br-none' : 'bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-bl-none'
+                  }`}>
+                    <p className="text-sm whitespace-pre-wrap">
+                      {msg.text_body && <Linkify text={msg.text_body} isOnColoredBackground={isAgent} />}
+                    </p>
+                    
+                    {msg.media_url && msg.message_type === 'IMAGE' && (
+                      <img src={`${API_URL}${msg.media_url}`} alt="Media" className="mt-2 rounded-lg max-w-full max-h-64 object-contain shadow-sm border border-black/5" />
+                    )}
+                    {msg.media_url && msg.message_type === 'VIDEO' && (
+                      <video src={`${API_URL}${msg.media_url}`} controls className="mt-2 rounded-lg max-w-full max-h-64 shadow-sm border border-black/5" />
+                    )}
+                    {msg.media_url && (msg.message_type === 'DOCUMENT' || msg.message_type === 'AUDIO' || msg.message_type === 'VOICE') && (
+                      <a href={`${API_URL}${msg.media_url}`} target="_blank" rel="noopener noreferrer" className={`mt-2 text-xs font-semibold underline flex items-center gap-1 p-2 rounded ${isAgent ? 'bg-emerald-600/30 text-white' : 'bg-blue-50 text-blue-600'}`}>
+                        <Paperclip size={14} /> View Attachment
+                      </a>
+                    )}
+
+                    <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isNote ? 'text-yellow-600' : isAgent ? 'text-emerald-100' : 'text-[var(--color-text-muted)]'}`}>
                       {msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {isAgent && msg.direction === 'OUTBOUND' && (
+                        <MessageStatusTicks status={msg.delivery_status} />
+                      )}
                     </div>
                   </div>
                 </div>
@@ -170,41 +421,136 @@ export default function MessageThread({ conversationId, newMessage }: MessageThr
             );
           })}
           <div ref={endOfMessagesRef} />
+            </>
+          )}
         </div>
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-[var(--color-border-subtle)] bg-white">
+      <div className="p-4 border-t border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
         {sendError && (
           <div className="mb-2 flex items-center gap-2 text-xs text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             <AlertCircle size={14} className="flex-shrink-0" />
             {sendError}
           </div>
         )}
-        <div className="flex items-end gap-3 bg-gray-50 border border-gray-200 rounded-2xl p-2 focus-within:ring-2 focus-within:ring-emerald-100 focus-within:border-[var(--color-border-focus)] transition-all">
-          <textarea
-            placeholder="Type a message... (Shift+Enter for newline)"
-            value={inputText}
-            onChange={(e) => {
-              setInputText(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-                // Reset height
-                e.currentTarget.style.height = 'auto';
-              }
-            }}
-            className="flex-1 px-3 py-2 bg-transparent resize-none focus:outline-none text-sm min-h-[40px] max-h-[150px] overflow-y-auto w-full leading-relaxed"
-            rows={1}
+        
+        {attachmentError && (
+          <div className="mb-2 flex items-center gap-2 text-xs text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            <AlertCircle size={14} className="flex-shrink-0" />
+            {attachmentError}
+          </div>
+        )}
+
+        {attachment && (
+          <div className="mx-4 mb-2 p-2 bg-blue-50 border border-blue-100 rounded-lg flex items-center justify-between shadow-sm">
+            <div className="flex items-center gap-2 text-sm text-blue-700 truncate font-medium">
+              <Paperclip size={16} />
+              <span className="truncate">{attachment.name}</span>
+            </div>
+            <button onClick={() => setAttachment(null)} className="p-1 text-blue-400 hover:text-blue-700 hover:bg-blue-100 rounded-full transition-colors">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* Quick Replies Popover */}
+        {inputText.startsWith('/') && quickReplies.length > 0 && !isNoteMode && !isWindowClosed && (
+          <div className="mx-4 mb-2 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded-xl shadow-xl overflow-hidden max-h-48 overflow-y-auto animate-in slide-in-from-bottom-2 fade-in">
+            {quickReplies
+              .filter(r => `/${r.shortcut}`.startsWith(inputText.toLowerCase()))
+              .map(reply => (
+                <button
+                  key={reply.id}
+                  onClick={() => setInputText(reply.message)}
+                  className="w-full text-left px-4 py-3 border-b border-[var(--color-border-subtle)] last:border-b-0 hover:bg-[var(--color-bg-base)] focus:bg-[var(--color-bg-base)] transition-colors flex flex-col gap-1 focus:outline-none"
+                >
+                  <span className="font-mono text-xs font-bold text-[var(--color-brand-hover)] bg-emerald-50 px-2 py-0.5 rounded self-start">/{reply.shortcut}</span>
+                  <span className="text-sm text-[var(--color-text-secondary)] truncate">{reply.message}</span>
+                </button>
+              ))}
+            {quickReplies.filter(r => `/${r.shortcut}`.startsWith(inputText.toLowerCase())).length === 0 && (
+              <div className="p-4 text-sm text-[var(--color-text-secondary)] text-center">No quick replies found.</div>
+            )}
+          </div>
+        )}
+
+        <div className={`flex items-end gap-3 border rounded-xl p-2 mx-4 mb-4 focus-within:ring-2 focus-within:ring-emerald-100 focus-within:border-[var(--color-border-focus)] transition-all ${isNoteMode ? 'bg-yellow-50 border-yellow-200' : 'bg-[var(--color-bg-base)] border-[var(--color-border-subtle)]'}`}>
+          
+          <input
+            type="file"
+            ref={fileInputRef}
+            className="hidden"
+            accept={ATTACHMENT_ACCEPT}
+            onChange={handleFileChange}
+            disabled={isWindowClosed && !isNoteMode}
           />
+
+          {!isNoteMode && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isWindowClosed}
+              className={`p-2 rounded-full transition-colors ${isWindowClosed ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-secondary)] hover:text-blue-600 hover:bg-blue-50'}`}
+              title="Attach File"
+            >
+              <Paperclip size={20} />
+            </button>
+          )}
+
           <button
-            onClick={handleSend}
-            disabled={!inputText.trim() || isSending}
-            className="p-3 mb-1 bg-[var(--color-brand-primary)] hover:bg-[var(--color-brand-hover)] text-white rounded-full transition-transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:hover:scale-100 shadow-md flex-shrink-0"
+            onClick={() => setIsNoteMode(!isNoteMode)}
+            className={`p-2 rounded-full transition-colors ${isNoteMode ? 'text-yellow-600 bg-yellow-100' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-border-subtle)]'}`}
+            title="Toggle Internal Note"
+          >
+            <AlertCircle size={20} />
+          </button>
+
+          {isWindowClosed && !isNoteMode ? (
+            <div className="flex-1 px-3 py-2 bg-[var(--color-bg-base)] rounded-lg flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] flex-1">
+                <AlertCircle size={16} className="text-red-400 shrink-0" />
+                <span className="truncate text-xs sm:text-sm">Window closed. Send a template:</span>
+                <select
+                  className="bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 min-w-32"
+                  value={selectedTemplate}
+                  onChange={(e) => setSelectedTemplate(e.target.value)}
+                  disabled={templates.length === 0}
+                >
+                  {templates.length === 0 ? (
+                    <option value="">No approved templates</option>
+                  ) : (
+                    templates.map((t) => <option key={t.id} value={t.template_name}>{t.template_name}</option>)
+                  )}
+                </select>
+              </div>
+            </div>
+          ) : (
+            <textarea
+              placeholder={isNoteMode ? "Type an internal note..." : "Type a message... (Shift+Enter for newline)"}
+              value={inputText}
+              onChange={(e) => {
+                setInputText(e.target.value);
+                e.target.style.height = 'auto';
+                e.target.style.height = Math.min(e.target.scrollHeight, 150) + 'px';
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                  e.currentTarget.style.height = 'auto';
+                }
+              }}
+              className="flex-1 px-3 py-2 bg-transparent resize-none focus:outline-none text-sm min-h-[40px] max-h-[150px] overflow-y-auto w-full leading-relaxed"
+              rows={1}
+            />
+          )}
+
+          <button
+            onClick={isWindowClosed && !isNoteMode ? handleSendTemplate : handleSend}
+            disabled={((!inputText.trim() && !attachment) && !(isWindowClosed && !isNoteMode)) || isSending || (isWindowClosed && !isNoteMode && !selectedTemplate)}
+            title={isNoteMode ? 'Save note' : 'Send message'}
+            aria-label={isNoteMode ? 'Save note' : 'Send message'}
+            className={`p-3 mb-1 text-white rounded-full transition-transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:hover:scale-100 shadow-md flex-shrink-0 ${isNoteMode ? 'bg-yellow-500 hover:bg-yellow-600' : 'bg-[var(--color-brand-primary)] hover:bg-[var(--color-brand-hover)]'}`}
           >
             <Send size={18} className="ml-0.5" />
           </button>

@@ -4,6 +4,25 @@ import { API_URL } from '@/lib/config';
 
 type SocketEventHandler = (...args: unknown[]) => void;
 
+// Module-level (not per-hook-instance) so concurrent connect_error events
+// share one in-flight refresh instead of each firing its own -- mirrors
+// FetchInterceptor's dedup for the same reason.
+let socketRefreshPromise: Promise<void> | null = null;
+
+function refreshAccessTokenForSocket(): Promise<void> {
+  if (!socketRefreshPromise) {
+    socketRefreshPromise = fetch(`${API_URL}/api/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include'
+    })
+      .then(() => undefined, () => undefined)
+      .finally(() => {
+        socketRefreshPromise = null;
+      });
+  }
+  return socketRefreshPromise;
+}
+
 export function useSocket() {
   const [isConnected, setIsConnected] = useState(false);
   const socketRef = useRef<Socket | null>(null);
@@ -21,16 +40,21 @@ export function useSocket() {
 
     socket.on('connect', () => {
       setIsConnected(true);
-      console.log('Socket connected');
     });
 
     socket.on('disconnect', () => {
       setIsConnected(false);
-      console.log('Socket disconnected');
     });
 
     socket.on('connect_error', (err) => {
       console.error('Socket connection error:', err.message);
+      // A stale/expired access_token cookie is a common cause of a
+      // reconnect failing -- unlike plain fetch() calls (see
+      // FetchInterceptor), Socket.IO has no built-in way to retry after a
+      // 401-equivalent, so proactively refresh here. Socket.IO's own
+      // exponential-backoff reconnect will then pick up the fresh cookie on
+      // its next attempt.
+      refreshAccessTokenForSocket();
     });
 
     return () => {

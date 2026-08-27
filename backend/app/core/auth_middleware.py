@@ -2,17 +2,9 @@ from functools import wraps
 from flask import request, jsonify, g
 import jwt
 from app.core.config import SECRET_KEY
-from app.db.database import db
-from app.models.user import User
+from app.db.firebase import db
 
 def require_role(*allowed_roles):
-    """
-    Decorator to protect routes and require specific roles.
-    Verifies the JWT, then re-confirms the user's current role and status in
-    the database (rather than trusting the JWT claims alone) so a deactivated
-    or demoted user can't keep using an unexpired token. Exposes the loaded
-    user on flask.g.current_user for the view to use.
-    """
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
@@ -26,11 +18,15 @@ def require_role(*allowed_roles):
             except jwt.InvalidTokenError:
                 return jsonify({"status": "error", "message": "Invalid token"}), 401
 
-            user = db.session.get(User, payload.get("sub"))
-            if user is None or user.system_status != "ACTIVE":
+            user_doc = db.client.collection("users").document(payload.get("sub")).get()
+            if not user_doc.exists:
+                return jsonify({"status": "error", "message": "Invalid token"}), 401
+                
+            user = user_doc.to_dict()
+            if user.get("system_status") != "ACTIVE":
                 return jsonify({"status": "error", "message": "Invalid token"}), 401
 
-            if user.role not in allowed_roles:
+            if user.get("role") not in allowed_roles:
                 return jsonify({"status": "error", "message": "Unauthorized"}), 403
 
             g.current_user = user

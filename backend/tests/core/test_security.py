@@ -1,5 +1,5 @@
 import pytest
-from app.core.security import encrypt_phone, decrypt_phone, hash_phone
+from app.core.security import encrypt_phone, decrypt_phone, hash_phone, generate_masked_id
 import hashlib
 from app.core.config import ENCRYPTION_KEY
 
@@ -69,3 +69,27 @@ def test_decrypt_invalid_token_raises_error(app):
         import pytest
         with pytest.raises(ValueError, match="Invalid or corrupted encryption token"):
             decrypt_phone("not-a-valid-token")
+
+def test_masked_id_is_not_derivable_from_the_phone_number(app):
+    """
+    An agent must not be able to confirm a customer's identity by guessing
+    their phone number and computing a hash themselves, so masked_id must
+    NOT be a deterministic function of the phone (or its hash) -- it takes
+    no phone-derived input at all.
+    """
+    with app.app_context():
+        phone = "16505559999"
+        phone_hash = hash_phone(phone)
+
+        masked_id = generate_masked_id()
+
+        assert phone_hash[:8] not in masked_id
+
+def test_masked_id_is_not_deterministic(app):
+    """
+    Calling the generator twice must not produce the same label, otherwise
+    it would still be guessable/replayable like the old hash-based scheme.
+    """
+    with app.app_context():
+        ids = {generate_masked_id() for _ in range(20)}
+        assert len(ids) == 20

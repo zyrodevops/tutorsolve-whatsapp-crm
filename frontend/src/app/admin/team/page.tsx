@@ -1,11 +1,15 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, X, Trash2 } from 'lucide-react';
+import { Users, Plus, X, Trash2, UserX, UserCheck } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { PageShell } from '@/components/ui/PageShell';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { LoadingState } from '@/components/ui/LoadingState';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import AppShell from '@/components/layout/AppShell';
 import type { CurrentUser } from '@/types/auth';
 
@@ -36,6 +40,12 @@ function TeamManagementContent() {
   });
 
   const router = useRouter();
+
+  const closeModal = () => {
+    setIsModalOpen(false);
+    setFormError('');
+    setFormData({ full_name: '', email: '', password: '', role: 'AGENT' });
+  };
 
   const fetchUsers = async () => {
     setIsFetchingUsers(true);
@@ -97,8 +107,7 @@ function TeamManagementContent() {
       }
 
       setSuccess(`User ${formData.full_name} created successfully! An email has been sent.`);
-      setIsModalOpen(false);
-      setFormData({ full_name: '', email: '', password: '', role: 'AGENT' });
+      closeModal();
 
       // Refresh the table
       fetchUsers();
@@ -115,6 +124,30 @@ function TeamManagementContent() {
   };
 
   const [pendingDeleteUser, setPendingDeleteUser] = useState<User | null>(null);
+  const [pendingDeactivateUser, setPendingDeactivateUser] = useState<User | null>(null);
+
+  const handleSetSystemStatus = async (userId: string, systemStatus: 'ACTIVE' | 'INACTIVE') => {
+    setPendingDeactivateUser(null);
+    try {
+      const response = await fetch(`${API_URL}/api/users/${userId}/system-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ system_status: systemStatus })
+      });
+
+      if (response.ok) {
+        setSuccess(systemStatus === 'ACTIVE' ? 'Account reactivated' : 'Account deactivated');
+        fetchUsers();
+      } else {
+        const payload = await response.json();
+        setError(payload.message || 'Failed to update account status');
+      }
+    } catch (err) {
+      console.error('Failed to update system status', err);
+      setError('An unexpected error occurred while updating account status');
+    }
+  };
 
   const handleDeleteUser = async () => {
     if (!pendingDeleteUser) return;
@@ -147,68 +180,62 @@ function TeamManagementContent() {
   };
 
   return (
-    <div className="h-full overflow-y-auto p-8">
-      <div className="max-w-6xl mx-auto space-y-6">
-
-        {/* Header Section */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-[var(--color-text-primary)] tracking-tight">
-              Team Management
-            </h1>
-            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              Manage your CRM agents and their permissions.
-            </p>
-          </div>
-
+    <PageShell>
+      <PageHeader
+        icon={<Users className="w-6 h-6" />}
+        title="Team Management"
+        subtitle="Manage your CRM agents and their permissions."
+        actions={
           <Button className="flex items-center" onClick={() => {
             setFormError('');
+            setFormData({ full_name: '', email: '', password: '', role: 'AGENT' });
             setIsModalOpen(true);
           }}>
             <Plus className="w-4 h-4 mr-2" />
             Add Employee
           </Button>
+        }
+      />
+
+      {success && (
+        <div className="p-4 bg-green-50 border border-green-200 text-[var(--color-status-success)] rounded-md">
+          {success}
+        </div>
+      )}
+
+      {error && (
+        <div className="p-4 bg-red-50 border border-red-200 text-[var(--color-status-error)] rounded-md">
+          {error}
+        </div>
+      )}
+
+      {/* Table Section */}
+      <div className="bg-[var(--color-bg-surface)] rounded-xl border border-[var(--color-border-subtle)] overflow-hidden">
+        <div className="p-6 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-base)] flex items-center space-x-3">
+          <Users className="w-5 h-5 text-[var(--color-text-secondary)]" />
+          <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">
+            Active Employees
+          </h2>
         </div>
 
-        {success && (
-          <div className="p-4 bg-green-50 border border-green-200 text-[var(--color-status-success)] rounded-md">
-            {success}
-          </div>
-        )}
-
-        {error && (
-          <div className="p-4 bg-red-50 border border-red-200 text-[var(--color-status-error)] rounded-md">
-            {error}
-          </div>
-        )}
-
-        {/* Table Section */}
-        <div className="bg-[var(--color-bg-surface)] rounded-xl border border-[var(--color-border-subtle)] overflow-hidden">
-          <div className="p-6 border-b border-[var(--color-border-subtle)] bg-gray-50 flex items-center space-x-3">
-            <Users className="w-5 h-5 text-[var(--color-text-secondary)]" />
-            <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">
-              Active Employees
-            </h2>
-          </div>
-
-          {isFetchingUsers ? (
-            <div className="p-16 flex justify-center">
-              <p className="text-[var(--color-text-secondary)]">Loading team...</p>
+        {isFetchingUsers ? (
+          <LoadingState label="Loading team..." />
+        ) : users.length === 0 ? (
+          <div className="p-16 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-4">
+              <Users className="w-8 h-8 text-[var(--color-brand-primary)]" />
             </div>
-          ) : users.length === 0 ? (
-            <div className="p-16 flex flex-col items-center justify-center text-center">
-              <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-4">
-                <Users className="w-8 h-8 text-[var(--color-brand-primary)]" />
-              </div>
-              <h3 className="text-lg font-medium text-[var(--color-text-primary)]">No team members found</h3>
-              <p className="mt-2 text-sm text-[var(--color-text-secondary)] max-w-sm">
-                Use the Add Employee button to provision a new Agent or Manager account into the database.
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
+            <h3 className="text-lg font-medium text-[var(--color-text-primary)]">No team members found</h3>
+            <p className="mt-2 text-sm text-[var(--color-text-secondary)] max-w-sm">
+              Use the Add Employee button to provision a new Agent or Manager account into the database.
+            </p>
+          </div>
+        ) : (
+          <div className="w-full">
+            {/* Desktop Table View */}
+            <div className="hidden md:block overflow-x-auto">
               <table className="w-full text-left text-sm text-[var(--color-text-secondary)]">
-                <thead className="bg-gray-50 text-[var(--color-text-primary)] uppercase text-xs border-b border-[var(--color-border-subtle)]">
+                <thead className="bg-[var(--color-bg-base)] text-[var(--color-text-primary)] uppercase text-xs border-b border-[var(--color-border-subtle)]">
                   <tr>
                     <th className="px-6 py-4 font-medium">Name</th>
                     <th className="px-6 py-4 font-medium">Email</th>
@@ -219,13 +246,13 @@ function TeamManagementContent() {
                 </thead>
                 <tbody className="divide-y divide-[var(--color-border-subtle)]">
                   {users.map((user) => (
-                    <tr key={user.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={user.id} className="hover:bg-[var(--color-bg-base)] transition-colors">
                       <td className="px-6 py-4 font-medium text-[var(--color-text-primary)]">
                         {user.full_name}
                       </td>
                       <td className="px-6 py-4">{user.email}</td>
                       <td className="px-6 py-4">
-                        <span className={`px-2 py-1 rounded-md text-xs font-medium ${roleBadgeStyles[user.role] ?? 'bg-gray-50 text-gray-700'}`}>
+                        <span className={`px-2 py-1 rounded-md text-xs font-medium ${roleBadgeStyles[user.role] ?? 'bg-[var(--color-bg-base)] text-[var(--color-text-secondary)]'}`}>
                           {user.role}
                         </span>
                       </td>
@@ -244,13 +271,32 @@ function TeamManagementContent() {
                             (You)
                           </span>
                         ) : (
-                          <button
-                            onClick={() => setPendingDeleteUser(user)}
-                            className="text-gray-400 hover:text-red-600 transition-colors"
-                            title="Delete User"
-                          >
-                            <Trash2 className="w-4 h-4 inline-block" />
-                          </button>
+                          <div className="flex items-center justify-end gap-3">
+                            {user.system_status === 'ACTIVE' ? (
+                              <button
+                                onClick={() => setPendingDeactivateUser(user)}
+                                className="text-[var(--color-text-muted)] hover:text-orange-600 transition-colors"
+                                title="Deactivate User"
+                              >
+                                <UserX className="w-4 h-4 inline-block" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleSetSystemStatus(user.id, 'ACTIVE')}
+                                className="text-[var(--color-text-muted)] hover:text-[var(--color-brand-primary)] transition-colors"
+                                title="Reactivate User"
+                              >
+                                <UserCheck className="w-4 h-4 inline-block" />
+                              </button>
+                            )}
+                            <button
+                              onClick={() => setPendingDeleteUser(user)}
+                              className="text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] transition-colors"
+                              title="Delete User"
+                            >
+                              <Trash2 className="w-4 h-4 inline-block" />
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>
@@ -258,95 +304,173 @@ function TeamManagementContent() {
                 </tbody>
               </table>
             </div>
-          )}
-        </div>
 
-        {/* Add Employee Modal */}
-        {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-[var(--color-bg-surface)] w-full max-w-md rounded-xl shadow-lg p-6 relative">
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-              >
-                <X className="w-5 h-5" />
-              </button>
-
-              <h2 className="text-xl font-bold text-[var(--color-text-primary)] mb-6">Create New User</h2>
-
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <Input
-                  id="full_name"
-                  label="Full Name"
-                  required
-                  value={formData.full_name}
-                  onChange={(e) => setFormData({...formData, full_name: e.target.value})}
-                />
-                <Input
-                  id="email"
-                  type="email"
-                  label="Email Address"
-                  required
-                  value={formData.email}
-                  onChange={(e) => setFormData({...formData, email: e.target.value})}
-                />
-                <Input
-                  id="password"
-                  type="password"
-                  label="Temporary Password"
-                  required
-                  value={formData.password}
-                  onChange={(e) => setFormData({...formData, password: e.target.value})}
-                />
-
-                <div className="flex flex-col w-full">
-                  <label className="mb-1 text-sm font-medium text-[var(--color-text-primary)]">Role</label>
-                  <select
-                    className="px-3 py-2 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded-md text-sm focus:ring-[var(--color-border-focus)] focus:border-transparent outline-none"
-                    value={formData.role}
-                    onChange={(e) => setFormData({...formData, role: e.target.value})}
-                  >
-                    <option value="AGENT">Agent</option>
-                    <option value="MANAGER">Manager</option>
-                    <option value="ADMIN">Admin</option>
-                  </select>
-                </div>
-
-                {formError && (
-                  <div className="p-3 text-sm text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-md">
-                    {formError}
+            {/* Mobile Card View */}
+            <div className="md:hidden flex flex-col divide-y divide-[var(--color-border-subtle)]">
+              {users.map((user) => (
+                <div key={user.id} className="p-4 flex flex-col gap-3 hover:bg-[var(--color-bg-base)] transition-colors">
+                  <div className="flex justify-between items-start">
+                    <div className="min-w-0 pr-2">
+                      <p className="font-semibold text-[var(--color-text-primary)] truncate">{user.full_name}</p>
+                      <p className="text-xs text-[var(--color-text-secondary)] truncate mt-0.5">{user.email}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${roleBadgeStyles[user.role] ?? 'bg-[var(--color-bg-base)] text-[var(--color-text-secondary)]'}`}>
+                        {user.role}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                        user.system_status === 'ACTIVE'
+                          ? 'bg-emerald-50 text-emerald-700'
+                          : 'bg-red-50 text-red-700'
+                      }`}>
+                        {user.system_status}
+                      </span>
+                    </div>
                   </div>
-                )}
-
-                <div className="pt-4 flex justify-end space-x-3">
-                  <Button type="button" variant="ghost" onClick={() => setIsModalOpen(false)}>Cancel</Button>
-                  <Button type="submit" isLoading={isLoading}>Create User</Button>
+                  <div className="flex justify-end gap-1 pt-2">
+                    {user.is_current_user ? (
+                      <span className="text-xs font-medium text-[var(--color-text-muted)]">
+                        (You)
+                      </span>
+                    ) : (
+                      <>
+                        {user.system_status === 'ACTIVE' ? (
+                          <button
+                            onClick={() => setPendingDeactivateUser(user)}
+                            className="p-2 text-[var(--color-text-muted)] hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors"
+                            title="Deactivate User"
+                          >
+                            <UserX className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleSetSystemStatus(user.id, 'ACTIVE')}
+                            className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-brand-primary)] hover:bg-emerald-50 rounded-lg transition-colors"
+                            title="Reactivate User"
+                          >
+                            <UserCheck className="w-4 h-4" />
+                          </button>
+                        )}
+                        <button
+                          onClick={() => setPendingDeleteUser(user)}
+                          className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete User"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </form>
+              ))}
             </div>
           </div>
         )}
-
-        {/* Delete Confirmation Modal */}
-        {pendingDeleteUser && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-[var(--color-bg-surface)] w-full max-w-sm rounded-xl shadow-lg p-6">
-              <h2 className="text-lg font-bold text-[var(--color-text-primary)] mb-2">Remove team member?</h2>
-              <p className="text-sm text-[var(--color-text-secondary)] mb-6">
-                <span className="font-medium text-[var(--color-text-primary)]">{pendingDeleteUser.full_name}</span> will lose access immediately. This can&apos;t be undone.
-              </p>
-              <div className="flex justify-end space-x-3">
-                <Button type="button" variant="ghost" onClick={() => setPendingDeleteUser(null)}>Cancel</Button>
-                <Button type="button" variant="danger" onClick={handleDeleteUser}>
-                  Remove
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
       </div>
-    </div>
+
+      {/* Add Employee Modal */}
+      {isModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={closeModal}
+        >
+          <div
+            className="bg-[var(--color-bg-surface)] w-full max-w-md max-h-[90vh] overflow-y-auto rounded-xl shadow-lg p-6 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={closeModal}
+              className="absolute top-4 right-4 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <h2 className="text-xl font-bold text-[var(--color-text-primary)] mb-6">Create New User</h2>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <Input
+                id="full_name"
+                label="Full Name"
+                placeholder="John Doe"
+                required
+                value={formData.full_name}
+                onChange={(e) => setFormData({...formData, full_name: e.target.value})}
+              />
+              <Input
+                id="email"
+                type="email"
+                label="Email Address"
+                placeholder="john.doe@example.com"
+                required
+                value={formData.email}
+                onChange={(e) => setFormData({...formData, email: e.target.value})}
+              />
+              <Input
+                id="password"
+                type="password"
+                label="Temporary Password"
+                placeholder="••••••••"
+                required
+                value={formData.password}
+                onChange={(e) => setFormData({...formData, password: e.target.value})}
+              />
+
+              <div className="flex flex-col w-full">
+                <label className="mb-1 text-sm font-medium text-[var(--color-text-primary)]">Role</label>
+                <select
+                  className="px-3 py-2 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded-md text-sm focus:ring-[var(--color-border-focus)] focus:border-transparent outline-none"
+                  value={formData.role}
+                  onChange={(e) => setFormData({...formData, role: e.target.value})}
+                >
+                  <option value="AGENT">Agent</option>
+                  <option value="MANAGER">Manager</option>
+                  <option value="ADMIN">Admin</option>
+                </select>
+              </div>
+
+              {formError && (
+                <div className="p-3 text-sm text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-md">
+                  {formError}
+                </div>
+              )}
+
+              <div className="pt-4 flex justify-end space-x-3">
+                <Button type="button" variant="ghost" onClick={closeModal}>Cancel</Button>
+                <Button type="submit" isLoading={isLoading}>Create User</Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {pendingDeleteUser && (
+        <ConfirmModal
+          title="Remove team member?"
+          description={
+            <>
+              <span className="font-medium text-[var(--color-text-primary)]">{pendingDeleteUser.full_name}</span> will lose access immediately. This can&apos;t be undone.
+            </>
+          }
+          confirmLabel="Remove"
+          onConfirm={handleDeleteUser}
+          onCancel={() => setPendingDeleteUser(null)}
+        />
+      )}
+
+      {pendingDeactivateUser && (
+        <ConfirmModal
+          title="Deactivate this account?"
+          description={
+            <>
+              <span className="font-medium text-[var(--color-text-primary)]">{pendingDeactivateUser.full_name}</span> will immediately lose access -- any open session is signed out on their next request. Their history is kept, and you can reactivate the account anytime.
+            </>
+          }
+          confirmLabel="Deactivate"
+          onConfirm={() => handleSetSystemStatus(pendingDeactivateUser.id, 'INACTIVE')}
+          onCancel={() => setPendingDeactivateUser(null)}
+        />
+      )}
+    </PageShell>
   );
 }
 
