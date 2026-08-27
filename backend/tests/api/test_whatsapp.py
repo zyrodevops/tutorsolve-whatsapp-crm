@@ -312,3 +312,93 @@ def test_whatsapp_webhook_receive_stores_meta_message_id(client, app, mock_db_cl
     messages = list(mock_db_client.collection("messages").where("meta_message_id", "==", "wamid.unique-1").stream())
     assert len(messages) == 1
     assert messages[0].to_dict()["text_body"] == "Hi"
+
+def test_whatsapp_webhook_receive_missing_profile_name(client, mock_db_client):
+    """
+    Test that an incoming message from a customer with no public profile name
+    is accepted and stored with a default fallback name.
+    """
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": "123",
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "contacts": [{"profile": {}, "wa_id": "16505558888"}],
+                    "messages": [{
+                        "from": "16505558888",
+                        "id": "wamid.no-name-1",
+                        "timestamp": "1603059201",
+                        "type": "text",
+                        "text": {"body": "Hello from anonymous user"}
+                    }]
+                }
+            }]
+        }]
+    }
+
+    response = client.post("/webhook", json=payload)
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "success"
+
+def test_whatsapp_webhook_receive_missing_profile_dict(client, mock_db_client):
+    """
+    Test that an incoming message where the contact object has no profile dict
+    is accepted and handled gracefully.
+    """
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": "123",
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "contacts": [{"wa_id": "16505557777"}],
+                    "messages": [{
+                        "from": "16505557777",
+                        "id": "wamid.no-profile-1",
+                        "timestamp": "1603059201",
+                        "type": "text",
+                        "text": {"body": "Hello without profile dict"}
+                    }]
+                }
+            }]
+        }]
+    }
+
+    response = client.post("/webhook", json=payload)
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "success"
+
+def test_whatsapp_webhook_receive_missing_contacts_array(client, mock_db_client):
+    """
+    Test that an incoming message where contacts array is omitted
+    falls back to the message 'from' field.
+    """
+    payload = {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": "123",
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "messages": [{
+                        "from": "16505556666",
+                        "id": "wamid.no-contacts-1",
+                        "timestamp": "1603059201",
+                        "type": "text",
+                        "text": {"body": "Hello without contacts array"}
+                    }]
+                }
+            }]
+        }]
+    }
+
+    response = client.post("/webhook", json=payload)
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "success"
+

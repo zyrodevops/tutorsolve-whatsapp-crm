@@ -23,10 +23,13 @@ services:
     build:
       context: ./frontend
       args:
-        # Must be reachable from the *browser*, not from inside the frontend
-        # container -- so this is the published host port above, not the
-        # Docker-internal service name "backend".
-        NEXT_PUBLIC_API_URL: http://localhost:5000
+        # Empty → all API calls use relative paths (/api/...) proxied via
+        # Next.js rewrites in next.config.ts. BACKEND_URL below tells Next.js
+        # where to proxy those requests at build time (baked into standalone output).
+        NEXT_PUBLIC_API_URL: ""
+        # Docker-internal service URL — reachable from the Next.js server process
+        # (not from the browser). Baked into the rewrite manifest at build time.
+        BACKEND_URL: http://backend:5000
     ports:
       - "3000:3000"
     depends_on:

@@ -1,4 +1,5 @@
 import pytest
+import firebase_admin
 from flask import Flask
 from app.db.firebase import FirebaseDB
 
@@ -8,6 +9,7 @@ def test_init_app_does_not_raise_when_unconfigured(monkeypatch):
     must not crash the app -- it just means Firestore isn't wired up yet.
     """
     monkeypatch.delenv("FIREBASE_SERVICE_ACCOUNT_B64", raising=False)
+    monkeypatch.setattr(firebase_admin, "_apps", {})
     app = Flask(__name__)
     db = FirebaseDB()
 
@@ -22,8 +24,10 @@ def test_init_app_fails_fast_on_invalid_credentials(monkeypatch):
     'NoneType has no attribute collection' deep inside a request handler.
     """
     monkeypatch.setenv("FIREBASE_SERVICE_ACCOUNT_B64", "not-valid-base64-or-json")
+    monkeypatch.setattr(firebase_admin, "_apps", {})
     app = Flask(__name__)
     db = FirebaseDB()
 
     with pytest.raises(Exception):
         db.init_app(app)
+

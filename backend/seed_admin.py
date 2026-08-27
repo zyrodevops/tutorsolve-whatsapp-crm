@@ -1,23 +1,22 @@
 import os
 from app import create_app
-from app.db.database import db
+from app.db.firebase import db
 from app.models.user import User
-from app.models.customer import Customer
-from app.models.conversation import Conversation
-from app.models.message import Message
 from app.core.security import hash_password
 
 app = create_app()
 
 def seed_admin():
     with app.app_context():
-        # Imports ensure models are registered with SQLAlchemy metadata
-        db.create_all()
-        
+        if not db.client:
+            print("Error: Firestore is not initialized. Check FIREBASE_SERVICE_ACCOUNT_B64 in .env.")
+            return
+
         email = "admin@crm.com"
         password = "adminpassword"
         
-        existing = db.session.execute(db.select(User).filter_by(email=email)).scalar_one_or_none()
+        users_ref = db.client.collection("users")
+        existing = list(users_ref.where("email", "==", email).limit(1).stream())
         
         if existing:
             print(f"Admin already exists with email: {email}")
@@ -30,12 +29,11 @@ def seed_admin():
             role="ADMIN"
         )
         
-        db.session.add(admin)
-        db.session.commit()
-        
+        users_ref.document(admin.id).set(admin.to_dict())
         print("=== Admin Seeded Successfully ===")
         print(f"Email: {email}")
         print(f"Password: {password}")
 
 if __name__ == "__main__":
     seed_admin()
+

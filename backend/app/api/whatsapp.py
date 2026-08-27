@@ -70,21 +70,27 @@ def webhook():
                 if msg_type not in supported_types:
                     return jsonify({"status": "ignored", "reason": f"unsupported_type_{msg_type}"}), 200
 
-                contact = value['contacts'][0]
-                phone = contact['wa_id']
-                name = contact['profile']['name']
-                meta_message_id = message['id']
+                contacts = value.get('contacts') or []
+                contact = contacts[0] if contacts else {}
+                phone = contact.get('wa_id') or message.get('from') or message.get('from_')
+                if not phone:
+                    return jsonify({"status": "error", "message": "Missing sender phone number"}), 400
+
+                profile = contact.get('profile') or {}
+                name = profile.get('name') or 'Customer'
+                meta_message_id = message.get('id')
                 
                 text_body = None
                 media_id = None
                 mime_type = None
                 
                 if msg_type == 'text':
-                    text_body = message['text']['body']
+                    text_body = message.get('text', {}).get('body')
                 else:
-                    media_id = message[msg_type]['id']
-                    mime_type = message[msg_type].get('mime_type')
-                    text_body = message[msg_type].get('caption', '')
+                    media_obj = message.get(msg_type, {})
+                    media_id = media_obj.get('id')
+                    mime_type = media_obj.get('mime_type')
+                    text_body = media_obj.get('caption', '')
 
                 from app.services.whatsapp_service import WhatsAppService
                 try:

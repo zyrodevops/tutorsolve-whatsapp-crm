@@ -28,7 +28,7 @@ def proxy_media(media_id):
     }
 
     # Step 1: Get the download URL from Meta
-    meta_url = f"https://graph.facebook.com/v20.0/{media_id}"
+    meta_url = f"https://graph.facebook.com/v25.0/{media_id}"
     try:
         url_resp = requests.get(meta_url, headers=headers, timeout=10)
         url_resp.raise_for_status()

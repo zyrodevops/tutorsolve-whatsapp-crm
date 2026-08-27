@@ -42,13 +42,18 @@ def login():
     }))
     
     is_secure = os.environ.get("SESSION_COOKIE_SECURE", "False").lower() == "true"
-    
+    # SameSite=None is required for cross-origin cookie sending (frontend and backend
+    # on different Railway domains). SameSite=None mandates Secure=True, which is
+    # satisfied on Railway (HTTPS). Localhost stays on SameSite=Lax because HTTP
+    # browsers refuse SameSite=None without Secure.
+    samesite = "None" if is_secure else "Lax"
+
     response.set_cookie(
         "access_token",
         token,
         httponly=True,
         secure=is_secure,
-        samesite="Lax",
+        samesite=samesite,
         max_age=900 # 15 minutes
     )
     
@@ -57,7 +62,7 @@ def login():
         refresh_token,
         httponly=True,
         secure=is_secure,
-        samesite="Lax",
+        samesite=samesite,
         max_age=604800 if credentials.get("remember_me") else 86400 # 7 days or 1 day
     )
     
@@ -94,13 +99,14 @@ def refresh():
         
         response = make_response(jsonify({"status": "success"}))
         is_secure = os.environ.get("SESSION_COOKIE_SECURE", "False").lower() == "true"
-        
+        samesite = "None" if is_secure else "Lax"
+
         response.set_cookie(
             "access_token",
             new_access_token,
             httponly=True,
             secure=is_secure,
-            samesite="Lax",
+            samesite=samesite,
             max_age=900
         )
         
@@ -167,12 +173,13 @@ def logout():
     
     # Destroy the cookie by setting max_age=0
     is_secure = os.environ.get("SESSION_COOKIE_SECURE", "False").lower() == "true"
+    samesite = "None" if is_secure else "Lax"
     response.set_cookie(
         "access_token",
         "",
         httponly=True,
-        secure=is_secure, # Set to True in production
-        samesite="Lax",
+        secure=is_secure,
+        samesite=samesite,
         max_age=0
     )
     response.set_cookie(
@@ -180,7 +187,7 @@ def logout():
         "",
         httponly=True,
         secure=is_secure,
-        samesite="Lax",
+        samesite=samesite,
         max_age=0
     )
     
