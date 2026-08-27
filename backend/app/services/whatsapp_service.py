@@ -100,6 +100,17 @@ META_STATUS_TO_DELIVERY_STATUS = {
     "failed": "FAILED",
 }
 
+def _extract_meta_error(e: requests.exceptions.RequestException) -> str:
+    status = getattr(e.response, "status_code", 500)
+    if e.response is not None:
+        try:
+            err_json = e.response.json()
+            if isinstance(err_json, dict) and "error" in err_json and "message" in err_json["error"]:
+                return f"{err_json['error']['message']} (HTTP {status})"
+        except Exception:
+            pass
+    return f"Meta API returned HTTP {status}"
+
 class WhatsAppService:
     @staticmethod
     def process_status_update(meta_message_id: str, status: str) -> None:
@@ -320,7 +331,7 @@ class WhatsAppService:
         except ValueError as e:
             return False, str(e)
 
-        url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+        url = f"https://graph.facebook.com/v25.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
         headers = {
             "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
             "Content-Type": "application/json"
@@ -371,7 +382,8 @@ class WhatsAppService:
             status = getattr(e.response, "status_code", 500)
             body = getattr(e.response, "text", "")
             logger.warning("Meta API request failed with HTTP %s: %s", status, body)
-            return False, f"Failed to send message: Meta API returned HTTP {status}"
+            err_msg = _extract_meta_error(e)
+            return False, f"Failed to send message: {err_msg}"
 
     @staticmethod
     def send_media_message(conversation_id: str, file_bytes: bytes, mime_type: str, filename: str, text: str, sender_id: str | None = None) -> tuple[bool, str | None]:
@@ -392,7 +404,7 @@ class WhatsAppService:
             return False, str(e)
 
         # Step 1: Upload media to Meta
-        upload_url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_NUMBER_ID}/media"
+        upload_url = f"https://graph.facebook.com/v25.0/{WHATSAPP_PHONE_NUMBER_ID}/media"
         headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
         
         files = {
@@ -411,7 +423,8 @@ class WhatsAppService:
             status = getattr(e.response, "status_code", 500)
             body = getattr(e.response, "text", "")
             logger.warning("Meta media upload failed with HTTP %s: %s", status, body)
-            return False, f"Failed to upload media: Meta API returned HTTP {status}"
+            err_msg = _extract_meta_error(e)
+            return False, f"Failed to upload media: {err_msg}"
 
         # Determine WhatsApp msg type based on mime type
         if mime_type.startswith("image/"):
@@ -424,7 +437,7 @@ class WhatsAppService:
             msg_type = "document"
 
         # Step 2: Send message with media id
-        send_url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+        send_url = f"https://graph.facebook.com/v25.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
         json_headers = {
             "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
             "Content-Type": "application/json"
@@ -493,7 +506,8 @@ class WhatsAppService:
             status = getattr(e.response, "status_code", 500)
             body = getattr(e.response, "text", "")
             logger.warning("Meta API request failed with HTTP %s: %s", status, body)
-            return False, f"Failed to send message: Meta API returned HTTP {status}"
+            err_msg = _extract_meta_error(e)
+            return False, f"Failed to send message: {err_msg}"
 
     @staticmethod
     def send_template_message(conversation_id: str, template_name: str, language_code: str = "en_US", sender_id: str | None = None) -> tuple[bool, str | None]:
@@ -513,7 +527,7 @@ class WhatsAppService:
         except ValueError as e:
             return False, str(e)
 
-        url = f"https://graph.facebook.com/v20.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+        url = f"https://graph.facebook.com/v25.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
         headers = {
             "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
             "Content-Type": "application/json"
@@ -572,4 +586,6 @@ class WhatsAppService:
             status = getattr(e.response, "status_code", 500)
             body = getattr(e.response, "text", "")
             logger.warning("Meta API request failed with HTTP %s: %s", status, body)
-            return False, f"Failed to send message: Meta API returned HTTP {status}"
+            err_msg = _extract_meta_error(e)
+            return False, f"Failed to send message: {err_msg}"
+

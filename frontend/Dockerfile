@@ -12,13 +12,15 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# NEXT_PUBLIC_* vars are inlined into the client bundle at build time, not
-# read at container-start time -- so this has to be a build ARG, not a
-# runtime environment variable in docker-compose. It must be a URL the
-# *browser* can reach (e.g. http://localhost:5000), not a Docker-internal
-# service name like http://backend:5000.
-ARG NEXT_PUBLIC_API_URL=http://localhost:5000
+# NEXT_PUBLIC_* vars are inlined into the client bundle at build time.
+# BACKEND_URL is read by next.config.ts to configure the /api/* proxy rewrite.
+# Both must be build ARGs (not runtime ENV) because standalone output bakes
+# the rewrite manifest at build time, not at container-start time.
+ARG NEXT_PUBLIC_API_URL=""
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+ARG BACKEND_URL=http://backend:5000
+ENV BACKEND_URL=$BACKEND_URL
 
 RUN pnpm build
 

@@ -19,12 +19,12 @@ class MessageSchema(Schema):
         unknown = EXCLUDE
 
 class ProfileSchema(Schema):
-    name = fields.Str(required=True)
+    name = fields.Str(required=False, allow_none=True)
     class Meta:
         unknown = EXCLUDE
 
 class ContactSchema(Schema):
-    profile = fields.Nested(ProfileSchema, required=True)
+    profile = fields.Nested(ProfileSchema, required=False, allow_none=True)
     wa_id = fields.Str(required=True)
     class Meta:
         unknown = EXCLUDE
