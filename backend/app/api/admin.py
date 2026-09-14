@@ -201,6 +201,22 @@ def update_business_settings():
         logger.exception("Unexpected error in %s", request.path)
         return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
 
+@bp.route('/business-settings/status', methods=['GET'])
+@require_role('ADMIN', 'MANAGER', 'AGENT')
+def get_business_settings_status():
+    try:
+        doc = db.client.collection("business_settings").document(BUSINESS_SETTINGS_DOC_ID).get()
+        settings = {**BUSINESS_SETTINGS_DEFAULTS, **(doc.to_dict() if doc.exists else {})}
+        
+        from app.services.whatsapp_service import _is_within_business_hours
+        is_open = _is_within_business_hours(settings)
+        
+        return jsonify({"status": "success", "data": {"is_open": is_open}}), 200
+    except Exception:
+        logger.exception("Unexpected error in %s", request.path)
+        return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
+
+
 @bp.route('/quick-replies', methods=['GET'])
 @require_role('ADMIN', 'MANAGER', 'AGENT')
 def get_quick_replies():
@@ -213,7 +229,7 @@ def get_quick_replies():
         return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
 
 @bp.route('/quick-replies', methods=['POST'])
-@require_role('ADMIN')
+@require_role('ADMIN', 'MANAGER')
 def create_quick_reply():
     data = request.get_json()
     if not data or 'shortcut' not in data or 'message' not in data:
@@ -286,27 +302,80 @@ def get_meta_templates():
         logger.exception("Unexpected error in %s", request.path)
         return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
 
-@bp.route('/meta-templates', methods=['POST'])
-@require_role('ADMIN')
-def create_meta_template():
-    data = request.get_json()
-    if not data or not data.get('template_name') or not data.get('language_code'):
-        return jsonify({"status": "error", "message": "Missing template_name or language_code"}), 400
-
+@bp.route('/meta-templates/sync', methods=['POST'])
+@require_role('ADMIN', 'MANAGER')
+def sync_meta_templates():
+    import requests
+    from app.core.config import WHATSAPP_ACCESS_TOKEN, WHATSAPP_BUSINESS_ACCOUNT_ID
+    
+    if not WHATSAPP_BUSINESS_ACCOUNT_ID or WHATSAPP_BUSINESS_ACCOUNT_ID == 'dummy_waba_id':
+        return jsonify({"status": "error", "message": "WHATSAPP_BUSINESS_ACCOUNT_ID is not configured in .env"}), 400
+        
     try:
-        doc_ref = db.client.collection("meta_templates").document()
-        template_data = {
-            "template_name": data["template_name"],
-            "meta_template_id": data.get("meta_template_id", ""),
-            "language_code": data["language_code"],
-            "body": data.get("body", ""),
-            # Templates recorded here have already been approved through Meta
-            # Business Manager -- this app doesn't submit new templates for
-            # approval, it just mirrors ones the admin knows are usable.
-            "status": "APPROVED",
+        url = f"https://graph.facebook.com/v17.0/{WHATSAPP_BUSINESS_ACCOUNT_ID}/message_templates"
+        headers = {
+            "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+            "Content-Type": "application/json"
         }
-        doc_ref.set(template_data)
-        return jsonify({"status": "success", "data": {"id": doc_ref.id, **template_data}}), 201
+        
+        response = requests.get(url, headers=headers)
+        if not response.ok:
+            logger.error("Failed to fetch templates from Meta: %s", response.text)
+            return jsonify({"status": "error", "message": "Failed to fetch templates from Meta API"}), 502
+            
+        data = response.json().get('data', [])
+        
+        # Batch write for efficiency
+        batch = db.client.batch()
+        count = 0
+        
+        # Pull existing to avoid duplicates if ID changes/doesn't match exactly
+        existing_docs = list(db.client.collection("meta_templates").stream())
+        existing_map = { f"{d.to_dict().get('template_name')}_{d.to_dict().get('language_code')}": d for d in existing_docs }
+        
+        for tmpl in data:
+            name = tmpl.get('name')
+            language = tmpl.get('language')
+            status = tmpl.get('status')
+            template_id = tmpl.get('id')
+            
+            # Extract body text from components
+            body = ""
+            components = tmpl.get('components', [])
+            for comp in components:
+                if comp.get('type') == 'BODY':
+                    body = comp.get('text', '')
+                    break
+                    
+            key = f"{name}_{language}"
+            
+            doc_data = {
+                "template_name": name,
+                "language_code": language,
+                "meta_template_id": str(template_id) if template_id else "",
+                "status": status,
+                "body": body
+            }
+            
+            if key in existing_map:
+                batch.update(existing_map[key].reference, doc_data)
+            else:
+                new_ref = db.client.collection("meta_templates").document()
+                batch.set(new_ref, doc_data)
+            
+            count += 1
+            
+            # Firestore batch limit is 500
+            if count >= 450:
+                batch.commit()
+                batch = db.client.batch()
+                count = 0
+                
+        if count > 0:
+            batch.commit()
+            
+        return jsonify({"status": "success", "message": "Templates synced successfully"}), 200
+        
     except Exception:
         logger.exception("Unexpected error in %s", request.path)
         return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
@@ -335,7 +404,7 @@ def get_tags():
         return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
 
 @bp.route('/tags', methods=['POST'])
-@require_role('ADMIN')
+@require_role('ADMIN', 'MANAGER')
 def create_tag():
     data = request.get_json()
     if not data or not data.get('name') or not data.get('color_hex'):
@@ -362,7 +431,7 @@ def create_tag():
         return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
 
 @bp.route('/tags/<tag_id>', methods=['DELETE'])
-@require_role('ADMIN')
+@require_role('ADMIN', 'MANAGER')
 def delete_tag(tag_id):
     try:
         db.client.collection("tags").document(tag_id).delete()
@@ -372,7 +441,7 @@ def delete_tag(tag_id):
         return jsonify({"status": "error", "message": GENERIC_ERROR_MESSAGE}), 500
 
 @bp.route('/quick-replies/<reply_id>', methods=['DELETE'])
-@require_role('ADMIN')
+@require_role('ADMIN', 'MANAGER')
 def delete_quick_reply(reply_id):
     try:
         db.client.collection("quick_replies").document(reply_id).delete()

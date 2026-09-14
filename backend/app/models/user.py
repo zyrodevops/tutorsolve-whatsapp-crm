@@ -15,8 +15,10 @@ class User:
     id: str = field(default_factory=generate_uuid)
     system_status: str = "ACTIVE"
     agent_status: str = "OFFLINE"
+    agent_status_reason: str = "MANUAL"
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     last_login: Optional[datetime] = None
+    last_assigned_at: Optional[datetime] = None
     # Bumped on password reset so refresh tokens issued before the reset stop
     # working (the token embeds the version it was issued under).
     token_version: int = 0
@@ -30,7 +32,9 @@ class User:
             "role": self.role,
             "system_status": self.system_status,
             "agent_status": self.agent_status,
+            "agent_status_reason": self.agent_status_reason,
             "created_at": self.created_at,
             "last_login": self.last_login,
+            "last_assigned_at": self.last_assigned_at,
             "token_version": self.token_version
         }

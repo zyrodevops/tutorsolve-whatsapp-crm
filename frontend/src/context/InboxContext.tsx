@@ -21,6 +21,8 @@ interface InboxContextType {
   markAsRead: (conversationId: string) => void;
   isConnected: boolean;
   isLoading: boolean;
+  hasMore: boolean;
+  fetchNextPage: () => Promise<void>;
 }
 
 const InboxContext = createContext<InboxContextType | undefined>(undefined);
@@ -31,15 +33,36 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
   const [newMessage, setNewMessage] = useState<NewMessagePayload | null>(null);
   const [messageStatusUpdate, setMessageStatusUpdate] = useState<MessageStatusUpdatePayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const isFetchingRef = useRef(false);
 
   const { on, off, isConnected } = useSocket();
 
-  const fetchConversations = useCallback(async () => {
+  const fetchConversations = useCallback(async (reset = true, cursor?: string) => {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    
+    if (reset) setIsLoading(true);
+
     try {
-      const res = await fetch(`${API_URL}/api/conversations`, { credentials: 'include' });
+      let url = `${API_URL}/api/conversations?limit=20`;
+      if (!reset && cursor) {
+        url += `&cursor=${cursor}`;
+      }
+
+      const res = await fetch(url, { credentials: 'include' });
       if (res.ok) {
         const body = await res.json();
-        setConversations(body.data);
+        
+        if (reset) {
+          setConversations(body.data);
+        } else {
+          setConversations(prev => {
+            const newConvs = body.data.filter((newC: Conversation) => !prev.find(p => p.id === newC.id));
+            return [...prev, ...newConvs];
+          });
+        }
+        setHasMore(body.has_more);
         setLoadError('');
       } else {
         setLoadError('Failed to load conversations.');
@@ -49,8 +72,18 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       setLoadError('Failed to load conversations.');
     } finally {
       setIsLoading(false);
+      isFetchingRef.current = false;
     }
   }, []);
+
+  const fetchNextPage = useCallback(async () => {
+    setConversations(prev => {
+      if (prev.length > 0 && hasMore) {
+        fetchConversations(false, prev[prev.length - 1].id);
+      }
+      return prev;
+    });
+  }, [fetchConversations, hasMore]);
 
   useEffect(() => {
     fetchConversations();
@@ -141,7 +174,9 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       totalUnreadCount,
       markAsRead,
       isConnected,
-      isLoading
+      isLoading,
+      hasMore,
+      fetchNextPage
     }}>
       {children}
     </InboxContext.Provider>

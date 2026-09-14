@@ -271,3 +271,20 @@ def test_reset_password_rejects_deactivated_user(client, mock_db_client, test_us
 
     assert response.status_code == 400
     assert response.json["status"] == "error"
+
+def test_logout_sets_offline(client, mock_db_client, test_user):
+    mock_db_client.collection("users").document(test_user.id).update({"agent_status": "ONLINE"})
+    token = create_access_token(user_id=test_user.id, role=test_user.role)
+    client.set_cookie("access_token", token)
+
+    response = client.post('/api/auth/logout')
+
+    assert response.status_code == 200
+    assert response.json["status"] == "success"
+
+    updated_user = mock_db_client.collection("users").document(test_user.id).get().to_dict()
+    assert updated_user["agent_status"] == "OFFLINE"
+    
+    cookies = response.headers.getlist('Set-Cookie')
+    assert any('access_token=;' in cookie or 'Max-Age=0' in cookie for cookie in cookies)
+

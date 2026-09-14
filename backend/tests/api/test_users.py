@@ -149,7 +149,7 @@ def test_delete_user_not_found(client, admin_token):
     assert response.status_code == 404
     assert response.get_json()["status"] == "error"
 
-def test_delete_user_with_assigned_conversation_is_refused(client, admin_token, mock_db_client):
+def test_delete_user_with_assigned_conversation_is_allowed(client, admin_token, mock_db_client):
     agent = User(
         full_name="Busy Agent",
         email="busy-agent@example.com",
@@ -170,8 +170,12 @@ def test_delete_user_with_assigned_conversation_is_refused(client, admin_token, 
 
     client.set_cookie("access_token", admin_token)
     response = client.delete(f"/api/users/{agent.id}")
-    assert response.status_code == 409
-    assert response.get_json()["status"] == "error"
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "success"
+    
+    # Check that it got unassigned
+    conv_doc = mock_db_client.collection("conversations").document(conv.id).get()
+    assert conv_doc.to_dict().get("assigned_agent_id") is None
 
 def test_delete_self(client, admin_token, mock_db_client):
     docs = list(mock_db_client.collection("users").where("email", "==", "admin@test.com").limit(1).stream())
@@ -288,3 +292,29 @@ def test_system_status_user_not_found(client, admin_token):
     response = client.patch("/api/users/nonexistent-id/system-status", json={"system_status": "INACTIVE"})
 
     assert response.status_code == 404
+
+def test_get_assignable_users(client, admin_token, agent_token, mock_db_client):
+    u1 = User(full_name="Agent One", email="a1@test.com", password_hash="h", role="AGENT", system_status="ACTIVE", agent_status="ONLINE")
+    u2 = User(full_name="Manager One", email="m1@test.com", password_hash="h", role="MANAGER", system_status="ACTIVE", agent_status="BUSY")
+    u3 = User(full_name="Inactive Agent", email="a2@test.com", password_hash="h", role="AGENT", system_status="INACTIVE")
+    mock_db_client.collection("users").document(u1.id).set(u1.to_dict())
+    mock_db_client.collection("users").document(u2.id).set(u2.to_dict())
+    mock_db_client.collection("users").document(u3.id).set(u3.to_dict())
+
+    client.set_cookie("access_token", agent_token)
+    response = client.get('/api/users/assignable')
+
+    assert response.status_code == 200
+    assert response.json["status"] == "success"
+    
+    data = response.json["data"]
+    emails = [d["email"] for d in data]
+    assert "a1@test.com" in emails
+    assert "m1@test.com" in emails
+    assert "a2@test.com" not in emails
+    assert "admin@test.com" not in emails
+    
+    a1_data = next(d for d in data if d["email"] == "a1@test.com")
+    assert "agent_status" in a1_data
+    assert a1_data["agent_status"] == "ONLINE"
+

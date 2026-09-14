@@ -63,6 +63,23 @@ class UserService:
                 "is_current_user": u.get("id") == current_user_id
             })
         return result
+    @staticmethod
+    def get_assignable_users() -> list[dict]:
+        users_ref = db.client.collection("users").where("system_status", "==", "ACTIVE")
+        users = users_ref.stream()
+        result = []
+        for doc in users:
+            u = doc.to_dict()
+            if u.get("role") in ["AGENT", "MANAGER"]:
+                result.append({
+                    "id": u.get("id"),
+                    "full_name": u.get("full_name"),
+                    "email": u.get("email"),
+                    "role": u.get("role"),
+                    "agent_status": u.get("agent_status")
+                })
+        return result
+
 
     @staticmethod
     def delete_user(user_id: str) -> tuple[bool, str | None]:
@@ -70,18 +87,20 @@ class UserService:
         if not user_ref.get().exists:
             return False, "not_found"
 
-        has_references = False
-        convs = list(db.client.collection("conversations").where("assigned_agent_id", "==", user_id).limit(1).stream())
-        if convs:
-            has_references = True
-            
-        if not has_references:
-            msgs = list(db.client.collection("messages").where("sender_id", "==", user_id).limit(1).stream())
-            if msgs:
-                has_references = True
-
-        if has_references:
+        msgs = list(db.client.collection("messages").where("sender_id", "==", user_id).limit(1).stream())
+        if msgs:
             return False, "has_references"
+
+        # Unassign any active chats
+        from app.core.socket_events import socketio
+        convs = list(db.client.collection("conversations").where("assigned_agent_id", "==", user_id).stream())
+        for conv in convs:
+            conv.reference.update({"assigned_agent_id": None})
+            socketio.emit('conversation_assigned', {
+                'conversation_id': conv.id,
+                'assigned_agent_id': None,
+                'assigned_agent_name': None
+            })
 
         try:
             user_ref.delete()

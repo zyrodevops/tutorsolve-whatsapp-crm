@@ -65,7 +65,6 @@ def login():
         samesite=samesite,
         max_age=604800 if credentials.get("remember_me") else 86400 # 7 days or 1 day
     )
-    
     return response, 200
 
 import jwt
@@ -166,6 +165,19 @@ def reset_password():
 
 @bp.route('/logout', methods=['POST'])
 def logout():
+    token = request.cookies.get("access_token")
+    if token:
+        import jwt
+        from app.core.config import SECRET_KEY
+        from app.db.firebase import db
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"], options={"verify_exp": False})
+            user_id = payload.get("sub")
+            if user_id:
+                db.client.collection("users").document(user_id).update({"agent_status": "OFFLINE"})
+        except Exception:
+            pass
+
     response = make_response(jsonify({
         "status": "success",
         "message": "Logged out successfully"
@@ -192,3 +204,17 @@ def logout():
     )
     
     return response, 200
+
+@bp.route('/heartbeat', methods=['PUT'])
+@require_role('ADMIN', 'MANAGER', 'AGENT')
+def heartbeat():
+    from app.db.firebase import db
+    try:
+        user_id = g.current_user["id"]
+        db.client.collection("users").document(user_id).update({
+            "last_seen_at": datetime.now(timezone.utc)
+        })
+        return jsonify({"status": "success", "message": "Heartbeat updated"}), 200
+    except Exception:
+        logger.exception("Unexpected error in heartbeat")
+        return jsonify({"status": "error", "message": "Failed to update heartbeat"}), 500

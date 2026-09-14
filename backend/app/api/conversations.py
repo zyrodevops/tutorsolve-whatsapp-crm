@@ -11,8 +11,23 @@ VALID_CONVERSATION_STATUSES = {"OPEN", "PENDING", "RESOLVED"}
 @bp.route('', methods=['GET'])
 @require_role('ADMIN', 'MANAGER', 'AGENT')
 def get_conversations():
+    limit = int(request.args.get('limit', 20))
+    cursor_id = request.args.get('cursor', None)
+
     convs_ref = db.client.collection("conversations")
-    docs = convs_ref.order_by("last_message_at", direction=Query.DESCENDING).stream()
+    query = convs_ref.order_by("last_message_at", direction=Query.DESCENDING).limit(limit)
+
+    if cursor_id:
+        cursor_doc = convs_ref.document(cursor_id).get()
+        if cursor_doc.exists:
+            query = query.start_after(cursor_doc)
+
+    docs = list(query.stream())
+    
+    # Check if there are more by querying 1 extra without fetching all data if possible,
+    # or just checking if len(docs) == limit. 
+    # If len(docs) < limit, there is no more. If == limit, there *might* be more.
+    has_more = len(docs) == limit
 
     # Round robin means the same few agents repeat across many conversations
     # -- resolve each agent id's name at most once per request rather than on
@@ -51,7 +66,7 @@ def get_conversations():
             "profile_photo_url": cust.get("profile_photo_url")
         })
 
-    return jsonify({"status": "success", "data": conversations}), 200
+    return jsonify({"status": "success", "data": conversations, "has_more": has_more}), 200
 
 @bp.route('/<conversation_id>/messages', methods=['GET'])
 @require_role('ADMIN', 'MANAGER', 'AGENT')
@@ -68,10 +83,21 @@ def get_messages(conversation_id):
     if conv_data.get("unread_count", 0) > 0:
         db.client.collection("conversations").document(conversation_id).update({"unread_count": 0})
 
+    agent_name_cache: dict[str, str | None] = {}
+
     msg_data = []
     for m_doc in messages:
         msg = m_doc.to_dict()
         ts = msg.get("timestamp")
+        
+        sender_id = msg.get("sender_id")
+        sender_name = None
+        if sender_id and msg.get("sender_type") in ("AGENT", "INTERNAL_NOTE"):
+            if sender_id not in agent_name_cache:
+                agent_doc = db.client.collection("users").document(sender_id).get()
+                agent_name_cache[sender_id] = agent_doc.to_dict().get("full_name") if agent_doc.exists else None
+            sender_name = agent_name_cache[sender_id]
+            
         msg_data.append({
             "id": msg.get("id"),
             "direction": msg.get("direction"),
@@ -81,7 +107,8 @@ def get_messages(conversation_id):
             "media_url": msg.get("media_url"),
             "media_mime_type": msg.get("media_mime_type"),
             "delivery_status": msg.get("delivery_status"),
-            "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+            "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+            "sender_name": sender_name
         })
 
     return jsonify({"status": "success", "data": msg_data}), 200
@@ -187,7 +214,8 @@ def add_note(conversation_id):
             'text_body': data['text'],
             'direction': None,
             'sender_type': 'INTERNAL_NOTE',
-            'timestamp': now.isoformat()
+            'timestamp': now.isoformat(),
+            'sender_name': g.current_user.get("full_name")
         }
     })
 
@@ -200,7 +228,8 @@ def add_note(conversation_id):
             "message_type": "TEXT",
             "text_body": data['text'],
             "delivery_status": "DELIVERED",
-            "timestamp": now.isoformat()
+            "timestamp": now.isoformat(),
+            "sender_name": g.current_user.get("full_name")
         }
     }), 200
 
@@ -227,6 +256,59 @@ def update_tags(conversation_id):
         "data": {"tags": tags}
     }), 200
 
+@bp.route('/<conversation_id>/assign', methods=['PATCH'])
+@require_role('ADMIN', 'MANAGER', 'AGENT')
+def assign_conversation(conversation_id):
+    data = request.get_json()
+    if not data or 'assigned_agent_id' not in data:
+        return jsonify({"status": "error", "message": "Missing 'assigned_agent_id' in request body"}), 400
+
+    assigned_agent_id = data['assigned_agent_id']
+
+    conv_ref = db.client.collection("conversations").document(conversation_id)
+    conv_doc = conv_ref.get()
+    if not conv_doc.exists:
+        return jsonify({"status": "error", "message": "Conversation not found"}), 404
+
+    current_user_role = g.current_user.get("role")
+    current_user_id = g.current_user.get("id")
+
+    if current_user_role == "AGENT":
+        # Agents can only assign to themselves (claim)
+        if assigned_agent_id != current_user_id:
+            return jsonify({"status": "error", "message": "Agents can only assign chats to themselves"}), 403
+
+    if assigned_agent_id is not None:
+        agent_doc = db.client.collection("users").document(assigned_agent_id).get()
+        if not agent_doc.exists:
+            return jsonify({"status": "error", "message": "Invalid agent ID"}), 400
+            
+        target_role = agent_doc.to_dict().get("role")
+        if target_role not in ["AGENT", "MANAGER"]:
+            return jsonify({"status": "error", "message": "Cannot assign chat to this user role"}), 400
+            
+        if current_user_role == "MANAGER" and target_role != "AGENT":
+            return jsonify({"status": "error", "message": "Managers can only assign chats to agents"}), 403
+            
+        agent_name = agent_doc.to_dict().get("full_name")
+    else:
+        agent_name = None
+
+    conv_ref.update({"assigned_agent_id": assigned_agent_id})
+
+    from app.core.socket_events import socketio
+    socketio.emit('conversation_assigned', {
+        'conversation_id': conversation_id,
+        'assigned_agent_id': assigned_agent_id,
+        'assigned_agent_name': agent_name
+    })
+
+    return jsonify({
+        "status": "success",
+        "message": "Conversation assigned successfully",
+        "data": {"assigned_agent_id": assigned_agent_id}
+    }), 200
+
 @bp.route('/<conversation_id>/status', methods=['PATCH'])
 @require_role('ADMIN', 'MANAGER', 'AGENT')
 def update_status(conversation_id):
@@ -242,10 +324,45 @@ def update_status(conversation_id):
         }), 400
 
     conv_ref = db.client.collection("conversations").document(conversation_id)
-    if not conv_ref.get().exists:
+    conv_doc = conv_ref.get()
+    if not conv_doc.exists:
         return jsonify({"status": "error", "message": "Conversation not found"}), 404
 
+    old_status = conv_doc.to_dict().get("status")
     conv_ref.update({"status": new_status})
+
+    if old_status == "RESOLVED" and new_status == "OPEN":
+        # Check round robin
+        from app.services.whatsapp_service import _pick_least_loaded_agent, BUSINESS_SETTINGS_DOC_ID
+        business_settings_ref = db.client.collection("business_settings").document(BUSINESS_SETTINGS_DOC_ID)
+        settings_snapshot = business_settings_ref.get()
+        if settings_snapshot.exists and settings_snapshot.to_dict().get("round_robin_enabled", True):
+            active_agents = [
+                doc.to_dict() | {"id": doc.id} for doc in 
+                db.client.collection("users")
+                .where("system_status", "==", "ACTIVE")
+                .where("role", "==", "AGENT")
+                .stream()
+            ]
+            all_open_convs = [
+                doc.to_dict() for doc in 
+                db.client.collection("conversations")
+                .where("status", "in", ["OPEN", "PENDING"])
+                .stream()
+            ]
+            
+            new_agent_id = _pick_least_loaded_agent(active_agents, all_open_convs)
+            if new_agent_id:
+                agent_doc = db.client.collection("users").document(new_agent_id).get()
+                agent_name = agent_doc.to_dict().get("full_name") if agent_doc.exists else None
+                conv_ref.update({"assigned_agent_id": new_agent_id})
+                
+                from app.core.socket_events import socketio
+                socketio.emit('conversation_assigned', {
+                    'conversation_id': conversation_id,
+                    'assigned_agent_id': new_agent_id,
+                    'assigned_agent_name': agent_name
+                })
 
     return jsonify({
         "status": "success",
@@ -262,6 +379,7 @@ def send_template_message_endpoint(conversation_id):
 
     template_name = data.get('template_name')
     language_code = data.get('language_code', 'en_US')
+    template_parameters = data.get('template_parameters', [])
 
     sender_id = g.current_user.get("id")
 
@@ -270,7 +388,8 @@ def send_template_message_endpoint(conversation_id):
             conversation_id=conversation_id,
             template_name=template_name,
             language_code=language_code,
-            sender_id=sender_id
+            sender_id=sender_id,
+            parameters=template_parameters
         )
     except (ConversationNotFoundError, CustomerNotFoundError) as e:
         return jsonify({"status": "error", "message": str(e)}), 404

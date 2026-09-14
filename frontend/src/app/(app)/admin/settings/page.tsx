@@ -2,9 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Settings, Info } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
-import AppShell from '@/components/layout/AppShell';
 import { PageShell } from '@/components/ui/PageShell';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LoadingState } from '@/components/ui/LoadingState';
@@ -12,53 +10,28 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Button } from '@/components/ui/Button';
 import { getTimezoneOptions } from '@/lib/timezones';
-import type { CurrentUser } from '@/types/auth';
+import { useSettingsStore, type BusinessSettings } from '@/store/settingsStore';
+import { useAuth } from '@/context/AuthContext';
 
 const TIMEZONE_OPTIONS = getTimezoneOptions();
 
-interface BusinessSettings {
-  business_hours_start: string | null;
-  business_hours_end: string | null;
-  timezone: string;
-  out_of_office_message: string | null;
-  first_greeting_message: string | null;
-  round_robin_enabled: boolean;
-}
-
 function BusinessSettingsContent() {
-  const [settings, setSettings] = useState<BusinessSettings | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { settings: storedSettings, isLoading, error: fetchError, fetch: fetchSettings, updateSettings } = useSettingsStore();
+  // Local draft — edits are local until "Save Settings" is clicked
+  const [draft, setDraft] = useState<BusinessSettings | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const router = useRouter();
 
+  useEffect(() => { fetchSettings(); }, [fetchSettings]);
+
+  // Sync store → local draft whenever the store data changes (initial load)
   useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/admin/business-settings`, { credentials: 'include' });
-        if (res.status === 401 || res.status === 403) {
-          router.push('/login');
-          return;
-        }
-        const payload = await res.json();
-        if (res.ok) {
-          setSettings(payload.data);
-        } else {
-          setError(payload.message || 'Failed to load settings.');
-        }
-      } catch (err) {
-        console.error('Failed to fetch business settings', err);
-        setError('An unexpected error occurred.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchSettings();
-  }, [router]);
+    if (storedSettings && !draft) setDraft(storedSettings);
+  }, [storedSettings, draft]);
 
   const handleSave = async () => {
-    if (!settings) return;
+    if (!draft) return;
     setIsSaving(true);
     setError('');
     setSuccess('');
@@ -67,31 +40,27 @@ function BusinessSettingsContent() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(settings)
+        body: JSON.stringify(draft)
       });
       const payload = await res.json();
       if (res.ok) {
-        setSettings(payload.data);
+        updateSettings(payload.data);
+        setDraft(payload.data);
         setSuccess('Settings saved');
       } else {
         setError(payload.message || 'Failed to save settings.');
       }
-    } catch (err) {
-      console.error('Failed to save business settings', err);
+    } catch {
       setError('An unexpected error occurred while saving.');
     } finally {
       setIsSaving(false);
     }
   };
 
-  if (isLoading || !settings) {
+  if ((isLoading && !storedSettings) || !draft) {
     return (
       <PageShell>
-        <PageHeader
-          icon={<Settings className="w-6 h-6" />}
-          title="Business Settings"
-          subtitle="Business hours, automated greetings, and chat routing."
-        />
+        <PageHeader icon={<Settings className="w-6 h-6" />} title="Business Settings" subtitle="Business hours, automated greetings, and chat routing." />
         <LoadingState label="Loading settings..." />
       </PageShell>
     );
@@ -119,9 +88,9 @@ function BusinessSettingsContent() {
           {success}
         </div>
       )}
-      {error && (
+      {(error || fetchError) && (
         <div className="p-4 bg-red-50 border border-red-200 text-[var(--color-status-error)] rounded-md">
-          {error}
+          {error || fetchError}
         </div>
       )}
 
@@ -133,26 +102,26 @@ function BusinessSettingsContent() {
               id="business_hours_start"
               type="time"
               label="Opens at"
-              value={settings.business_hours_start ?? ''}
-              onChange={(e) => setSettings({ ...settings, business_hours_start: e.target.value || null })}
+              value={draft.business_hours_start ?? ''}
+              onChange={(e) => setDraft({ ...draft, business_hours_start: e.target.value || null })}
             />
             <Input
               id="business_hours_end"
               type="time"
               label="Closes at"
-              value={settings.business_hours_end ?? ''}
-              onChange={(e) => setSettings({ ...settings, business_hours_end: e.target.value || null })}
+              value={draft.business_hours_end ?? ''}
+              onChange={(e) => setDraft({ ...draft, business_hours_end: e.target.value || null })}
             />
             <div className="flex flex-col w-full">
               <label htmlFor="timezone" className="mb-1 text-sm font-medium text-[var(--color-text-primary)]">Timezone</label>
               <select
                 id="timezone"
-                value={settings.timezone}
-                onChange={(e) => setSettings({ ...settings, timezone: e.target.value })}
+                value={draft.timezone}
+                onChange={(e) => setDraft({ ...draft, timezone: e.target.value })}
                 className="px-3 py-2 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded-md text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-border-focus)] focus:border-transparent"
               >
-                {!TIMEZONE_OPTIONS.includes(settings.timezone) && (
-                  <option value={settings.timezone}>{settings.timezone}</option>
+                {!TIMEZONE_OPTIONS.includes(draft.timezone) && (
+                  <option value={draft.timezone}>{draft.timezone}</option>
                 )}
                 {TIMEZONE_OPTIONS.map((tz) => (
                   <option key={tz} value={tz}>{tz}</option>
@@ -173,16 +142,16 @@ function BusinessSettingsContent() {
               label="First Greeting Message"
               rows={2}
               placeholder="Hi there! Welcome. An agent will be with you shortly."
-              value={settings.first_greeting_message ?? ''}
-              onChange={(e) => setSettings({ ...settings, first_greeting_message: e.target.value || null })}
+              value={draft.first_greeting_message ?? ''}
+              onChange={(e) => setDraft({ ...draft, first_greeting_message: e.target.value || null })}
             />
             <Textarea
               id="out_of_office_message"
               label="Out-of-Office Message"
               rows={2}
               placeholder="Sent instead of the greeting when a customer messages outside business hours."
-              value={settings.out_of_office_message ?? ''}
-              onChange={(e) => setSettings({ ...settings, out_of_office_message: e.target.value || null })}
+              value={draft.out_of_office_message ?? ''}
+              onChange={(e) => setDraft({ ...draft, out_of_office_message: e.target.value || null })}
             />
           </div>
         </div>
@@ -192,8 +161,8 @@ function BusinessSettingsContent() {
           <label className="flex items-center gap-3 text-sm text-[var(--color-text-primary)]">
             <input
               type="checkbox"
-              checked={settings.round_robin_enabled}
-              onChange={(e) => setSettings({ ...settings, round_robin_enabled: e.target.checked })}
+              checked={draft.round_robin_enabled}
+              onChange={(e) => setDraft({ ...draft, round_robin_enabled: e.target.checked })}
               className="w-4 h-4 rounded border-[var(--color-border-subtle)] text-[var(--color-brand-primary)] focus:ring-[var(--color-border-focus)]"
             />
             Round robin (auto-assign new chats to the next online agent)
@@ -226,9 +195,7 @@ function NotAuthorized() {
 }
 
 export default function BusinessSettingsPage() {
-  return (
-    <AppShell>
-      {(user: CurrentUser) => (user.role === 'ADMIN' ? <BusinessSettingsContent /> : <NotAuthorized />)}
-    </AppShell>
-  );
+  const { user } = useAuth();
+  if (!user) return null;
+  return user.role === 'ADMIN' ? <BusinessSettingsContent /> : <NotAuthorized />;
 }

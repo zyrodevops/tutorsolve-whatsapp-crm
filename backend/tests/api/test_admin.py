@@ -322,34 +322,7 @@ def test_get_business_settings_does_not_leak_raw_exception_text(client, admin_to
     assert body["status"] == "error"
     assert "super secret internal connection string" not in body["message"]
 
-def test_admin_creates_meta_template(client, admin_token, mock_db_client):
-    client.set_cookie("access_token", admin_token)
-    response = client.post('/api/admin/meta-templates', json={
-        "template_name": "order_confirmation",
-        "meta_template_id": "1122334455",
-        "language_code": "en_US",
-        "body": "Your order {{1}} has shipped!"
-    })
 
-    assert response.status_code == 201
-    data = response.get_json()["data"]
-    assert data["template_name"] == "order_confirmation"
-    assert data["status"] == "APPROVED"
-
-    saved = list(mock_db_client.collection("meta_templates").stream())
-    assert len(saved) == 1
-
-def test_create_meta_template_missing_fields(client, admin_token):
-    client.set_cookie("access_token", admin_token)
-    response = client.post('/api/admin/meta-templates', json={"template_name": "incomplete"})
-    assert response.status_code == 400
-
-def test_agent_cannot_create_meta_template(client, agent_token):
-    client.set_cookie("access_token", agent_token)
-    response = client.post('/api/admin/meta-templates', json={
-        "template_name": "x", "language_code": "en_US"
-    })
-    assert response.status_code == 403
 
 def test_agent_can_list_meta_templates(client, agent_token, mock_db_client):
     mock_db_client.collection("meta_templates").document("t1").set({
@@ -439,3 +412,19 @@ def test_agent_cannot_delete_tag(client, agent_token):
     client.set_cookie("access_token", agent_token)
     response = client.delete('/api/admin/tags/t2')
     assert response.status_code == 403
+
+def test_get_business_status(client, admin_token, mock_db_client):
+    from unittest.mock import patch
+    
+    client.set_cookie("access_token", admin_token)
+
+    with patch("app.services.whatsapp_service._is_within_business_hours", return_value=True):
+        response = client.get('/api/admin/business-settings/status')
+        assert response.status_code == 200
+        assert response.json["data"]["is_open"] is True
+
+    with patch("app.services.whatsapp_service._is_within_business_hours", return_value=False):
+        response2 = client.get('/api/admin/business-settings/status')
+        assert response2.status_code == 200
+        assert response2.json["data"]["is_open"] is False
+

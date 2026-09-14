@@ -1,17 +1,17 @@
 'use client';
+import { useAuth } from '@/context/AuthContext';
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Info, X } from 'lucide-react';
-import AppShell from '@/components/layout/AppShell';
 import ChatList from '@/components/inbox/ChatList';
 import MessageThread from '@/components/inbox/MessageThread';
 import CrmSidebar from '@/components/inbox/CrmSidebar';
-import { InboxProvider, useInbox } from '@/context/InboxContext';
+import { useInbox } from '@/context/InboxContext';
 import type { CurrentUser } from '@/types/auth';
 import type { Conversation } from '@/types/inbox';
 
 function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
-  const { conversations, setConversations, loadError, newMessage, messageStatusUpdate, isConnected, markAsRead, isLoading } = useInbox();
+  const { conversations, setConversations, loadError, newMessage, messageStatusUpdate, isConnected, markAsRead, isLoading, hasMore, fetchNextPage } = useInbox();
 
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [isNoteMode, setIsNoteMode] = useState(false);
@@ -88,6 +88,12 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
     );
   };
 
+  const handleAssignChange = (conversationId: string, agentId: string | null, agentName: string | null = null) => {
+    setConversations((prev) =>
+      prev.map((c) => (c.id === conversationId ? { ...c, assigned_agent_id: agentId, assigned_agent_name: agentName } : c))
+    );
+  };
+
   const activeConversation = conversations.find((c) => c.id === activeChat);
 
   return (
@@ -106,9 +112,14 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
         <ChatList
           conversations={conversations}
           selectedId={activeChat}
-          onSelect={handleSelectChat}
+          onSelect={(id) => {
+            setActiveChat(id);
+            if (!isDesktop) window.scrollTo(0, 0);
+          }}
           isSocketConnected={isConnected}
           isLoading={isLoading}
+          hasMore={hasMore}
+          fetchNextPage={fetchNextPage}
         />
       </div>
 
@@ -161,18 +172,19 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
           onAddNote={handleAddNote}
           onStatusChange={handleStatusChange}
           onTagsChange={handleTagsChange}
+          onAssignChange={handleAssignChange}
         />
       </div>
     </div>
   );
 }
 
+function InboxContentWrapper() {
+  const { user } = useAuth();
+  if (!user) return null;
+  return <InboxContent currentUser={user} />;
+}
+
 export default function DashboardPage() {
-  return (
-    <InboxProvider>
-      <AppShell>
-        {(user: CurrentUser) => <InboxContent currentUser={user} />}
-      </AppShell>
-    </InboxProvider>
-  );
+  return <InboxContentWrapper />;
 }

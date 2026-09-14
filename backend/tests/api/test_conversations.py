@@ -516,3 +516,39 @@ def test_api_rejects_unauthorized_roles(client, mock_db_client):
     client.post('/api/auth/login', json={"email": "unauth@example.com", "password": "password"})
     response = client.get('/api/conversations')
     assert response.status_code == 403
+
+def test_assign_conversation(client, mock_db_client):
+    from unittest.mock import patch
+    admin = User(email="admin_assign@test.com", full_name="Admin", password_hash=hash_password("password"), role="ADMIN")
+    agent = User(email="agent_assign@test.com", full_name="Agent", password_hash=hash_password("password"), role="AGENT")
+    mock_db_client.collection("users").document(admin.id).set(admin.to_dict())
+    mock_db_client.collection("users").document(agent.id).set(agent.to_dict())
+
+    c = Customer(phone_hash=hash_phone("assign"), real_phone_number_encrypted=encrypt_phone("assign"), masked_id="Lead-Assign")
+    mock_db_client.collection("customers").document(c.id).set(c.to_dict())
+    conv = Conversation(customer_id=c.id, status="OPEN")
+    mock_db_client.collection("conversations").document(conv.id).set(conv.to_dict())
+
+    client.post('/api/auth/login', json={"email": "admin_assign@test.com", "password": "password"})
+    
+    with patch("app.core.socket_events.socketio.emit") as mock_emit:
+        response = client.patch(f'/api/conversations/{conv.id}/assign', json={"assigned_agent_id": agent.id})
+
+    assert response.status_code == 200
+    assert response.json["status"] == "success"
+    assert response.json["data"]["assigned_agent_id"] == agent.id
+    
+    updated_conv = mock_db_client.collection("conversations").document(conv.id).get().to_dict()
+    assert updated_conv["assigned_agent_id"] == agent.id
+    
+    mock_emit.assert_called_once()
+    call_args = mock_emit.call_args
+    assert call_args[0][0] == "conversation_assigned"
+    assert call_args[0][1]["conversation_id"] == conv.id
+    assert call_args[0][1]["assigned_agent_id"] == agent.id
+
+    # Test Unassign
+    response2 = client.patch(f'/api/conversations/{conv.id}/assign', json={"assigned_agent_id": None})
+    assert response2.status_code == 200
+    assert response2.json["data"]["assigned_agent_id"] is None
+

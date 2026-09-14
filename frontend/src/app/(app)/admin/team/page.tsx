@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { Users, Plus, X, Trash2, UserX, UserCheck } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -10,27 +9,16 @@ import { PageShell } from '@/components/ui/PageShell';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LoadingState } from '@/components/ui/LoadingState';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
-import AppShell from '@/components/layout/AppShell';
-import type { CurrentUser } from '@/types/auth';
-
-interface User {
-  id: string;
-  full_name: string;
-  email: string;
-  role: string;
-  system_status: string;
-  created_at: string;
-  is_current_user: boolean;
-}
+import { useTeamStore } from '@/store/teamStore';
+import { useAuth } from '@/context/AuthContext';
 
 function TeamManagementContent() {
-  const [users, setUsers] = useState<User[]>([]);
-  const [isFetchingUsers, setIsFetchingUsers] = useState(true);
+  const { users, isLoading: isFetchingUsers, error, fetch: fetchUsers, setUsers, invalidate } = useTeamStore();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
   const [formError, setFormError] = useState('');
   const [success, setSuccess] = useState('');
+  const [mutationError, setMutationError] = useState('');
 
   const [formData, setFormData] = useState({
     full_name: '',
@@ -39,43 +27,14 @@ function TeamManagementContent() {
     role: 'AGENT'
   });
 
-  const router = useRouter();
+  // Fetch on mount — store's TTL guard makes this a no-op if data is fresh
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
   const closeModal = () => {
     setIsModalOpen(false);
     setFormError('');
     setFormData({ full_name: '', email: '', password: '', role: 'AGENT' });
   };
-
-  const fetchUsers = async () => {
-    setIsFetchingUsers(true);
-    try {
-      const res = await fetch(`${API_URL}/api/users`, { credentials: 'include' });
-
-      if (res.status === 401 || res.status === 403) {
-        // Token is invalid or expired, redirect to login
-        router.push('/login');
-        return;
-      }
-
-      const payload = await res.json();
-      if (res.ok) {
-        setUsers(payload.data);
-        setError('');
-      } else {
-        setError(payload.message || 'Failed to load team members.');
-      }
-    } catch (err) {
-      console.error('Failed to fetch users', err);
-      setError('Failed to load team members.');
-    } finally {
-      setIsFetchingUsers(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,10 +45,8 @@ function TeamManagementContent() {
     try {
       const response = await fetch(`${API_URL}/api/users`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'include', // Send the HttpOnly cookie for auth
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(formData)
       });
 
@@ -108,23 +65,17 @@ function TeamManagementContent() {
 
       setSuccess(`User ${formData.full_name} created successfully! An email has been sent.`);
       closeModal();
-
-      // Refresh the table
+      invalidate();
       fetchUsers();
-
     } catch (err: unknown) {
-      if (err instanceof Error) {
-        setFormError(err.message);
-      } else {
-        setFormError('An unexpected error occurred while creating user');
-      }
+      setFormError(err instanceof Error ? err.message : 'An unexpected error occurred while creating user');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const [pendingDeleteUser, setPendingDeleteUser] = useState<User | null>(null);
-  const [pendingDeactivateUser, setPendingDeactivateUser] = useState<User | null>(null);
+  const [pendingDeleteUser, setPendingDeleteUser] = useState<{ id: string; full_name: string } | null>(null);
+  const [pendingDeactivateUser, setPendingDeactivateUser] = useState<{ id: string; full_name: string } | null>(null);
 
   const handleSetSystemStatus = async (userId: string, systemStatus: 'ACTIVE' | 'INACTIVE') => {
     setPendingDeactivateUser(null);
@@ -138,14 +89,14 @@ function TeamManagementContent() {
 
       if (response.ok) {
         setSuccess(systemStatus === 'ACTIVE' ? 'Account reactivated' : 'Account deactivated');
-        fetchUsers();
+        // Optimistic update in-store
+        setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, system_status: systemStatus } : u));
       } else {
         const payload = await response.json();
-        setError(payload.message || 'Failed to update account status');
+        setMutationError(payload.message || 'Failed to update account status');
       }
-    } catch (err) {
-      console.error('Failed to update system status', err);
-      setError('An unexpected error occurred while updating account status');
+    } catch {
+      setMutationError('An unexpected error occurred while updating account status');
     }
   };
 
@@ -162,14 +113,13 @@ function TeamManagementContent() {
 
       if (response.ok) {
         setSuccess('User deleted successfully');
-        fetchUsers();
+        setUsers((prev) => prev.filter((u) => u.id !== userId));
       } else {
         const payload = await response.json();
-        setError(payload.message || 'Failed to delete user');
+        setMutationError(payload.message || 'Failed to delete user');
       }
-    } catch (err) {
-      console.error('Failed to delete user', err);
-      setError('An unexpected error occurred while deleting user');
+    } catch {
+      setMutationError('An unexpected error occurred while deleting user');
     }
   };
 
@@ -203,9 +153,9 @@ function TeamManagementContent() {
         </div>
       )}
 
-      {error && (
+      {(error || mutationError) && (
         <div className="p-4 bg-red-50 border border-red-200 text-[var(--color-status-error)] rounded-md">
-          {error}
+          {error || mutationError}
         </div>
       )}
 
@@ -483,9 +433,7 @@ function NotAuthorized() {
 }
 
 export default function TeamManagementPage() {
-  return (
-    <AppShell>
-      {(user: CurrentUser) => (user.role === 'ADMIN' ? <TeamManagementContent /> : <NotAuthorized />)}
-    </AppShell>
-  );
+  const { user } = useAuth();
+  if (!user) return null;
+  return user.role === 'ADMIN' ? <TeamManagementContent /> : <NotAuthorized />;
 }

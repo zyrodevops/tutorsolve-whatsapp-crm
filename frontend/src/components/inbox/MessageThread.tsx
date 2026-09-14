@@ -67,8 +67,20 @@ export default function MessageThread({ conversationId, conversation, newMessage
   const [isWindowClosed, setIsWindowClosed] = useState(false);
   const [timeRemainingLabel, setTimeRemainingLabel] = useState<string | null>(null);
   const [quickReplies, setQuickReplies] = useState<{id: string, shortcut: string, message: string}[]>([]);
-  const [templates, setTemplates] = useState<{id: string, template_name: string}[]>([]);
+  const [templates, setTemplates] = useState<{id: string, template_name: string, body?: string}[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [templateParameters, setTemplateParameters] = useState<string[]>([]);
+
+  useEffect(() => {
+    const template = templates.find(t => t.template_name === selectedTemplate);
+    if (template && template.body) {
+      const matches = template.body.match(/\{\{\d+\}\}/g) || [];
+      const uniqueVars = new Set(matches);
+      setTemplateParameters(Array.from({ length: uniqueVars.size }, () => ''));
+    } else {
+      setTemplateParameters([]);
+    }
+  }, [selectedTemplate, templates]);
 
   useEffect(() => {
     const fetchTemplates = async () => {
@@ -297,7 +309,10 @@ export default function MessageThread({ conversationId, conversation, newMessage
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ template_name: selectedTemplate })
+        body: JSON.stringify({ 
+          template_name: selectedTemplate,
+          template_parameters: templateParameters
+        })
       });
 
       if (res.ok) {
@@ -372,7 +387,8 @@ export default function MessageThread({ conversationId, conversation, newMessage
           ) : (
             <>
               {messages.map((msg, index) => {
-            const isAgent = msg.sender_type === 'AGENT';
+            const isAgentOrSystem = msg.sender_type === 'AGENT' || msg.sender_type === 'SYSTEM';
+            const isSystem = msg.sender_type === 'SYSTEM';
             const msgDate = new Date(msg.timestamp);
             const prevMsgDate = index > 0 ? new Date(messages[index - 1].timestamp) : null;
             const showDateSeparator = !prevMsgDate || msgDate.toDateString() !== prevMsgDate.toDateString();
@@ -388,13 +404,18 @@ export default function MessageThread({ conversationId, conversation, newMessage
                     </span>
                   </div>
                 )}
-                <div className={`flex ${isNote ? 'justify-center' : isAgent ? 'justify-end' : 'justify-start'}`}>
+                <div className={`flex ${isNote ? 'justify-center' : isAgentOrSystem ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[70%] rounded-xl px-4 py-3 shadow-sm ${
                     isNote ? 'bg-yellow-100 border border-yellow-200 text-yellow-900' :
-                    isAgent ? 'bg-[var(--color-brand-primary)] text-white rounded-br-none' : 'bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-bl-none'
+                    isAgentOrSystem ? 'bg-[var(--color-brand-primary)] text-white rounded-br-none' : 'bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-bl-none'
                   }`}>
-                    <p className="text-sm whitespace-pre-wrap">
-                      {msg.text_body && <Linkify text={msg.text_body} isOnColoredBackground={isAgent} />}
+                    {isSystem && (
+                      <div className="flex items-center gap-1 text-[10px] uppercase font-bold text-emerald-200 mb-1 bg-black/10 w-fit px-2 py-0.5 rounded-full">
+                        <span>🤖 System Auto-Reply</span>
+                      </div>
+                    )}
+                    <p className={`text-sm whitespace-pre-wrap ${isNote ? 'italic' : ''}`}>
+                      {msg.text_body && <Linkify text={msg.text_body} isOnColoredBackground={isAgentOrSystem} />}
                     </p>
                     
                     {msg.media_url && msg.message_type === 'IMAGE' && (
@@ -404,14 +425,20 @@ export default function MessageThread({ conversationId, conversation, newMessage
                       <video src={`${API_URL}${msg.media_url}`} controls className="mt-2 rounded-lg max-w-full max-h-64 shadow-sm border border-black/5" />
                     )}
                     {msg.media_url && (msg.message_type === 'DOCUMENT' || msg.message_type === 'AUDIO' || msg.message_type === 'VOICE') && (
-                      <a href={`${API_URL}${msg.media_url}`} target="_blank" rel="noopener noreferrer" className={`mt-2 text-xs font-semibold underline flex items-center gap-1 p-2 rounded ${isAgent ? 'bg-emerald-600/30 text-white' : 'bg-blue-50 text-blue-600'}`}>
+                      <a href={`${API_URL}${msg.media_url}`} target="_blank" rel="noopener noreferrer" className={`mt-2 text-xs font-semibold underline flex items-center gap-1 p-2 rounded ${isAgentOrSystem ? 'bg-emerald-600/30 text-white' : 'bg-blue-50 text-blue-600'}`}>
                         <Paperclip size={14} /> View Attachment
                       </a>
                     )}
 
-                    <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isNote ? 'text-yellow-600' : isAgent ? 'text-emerald-100' : 'text-[var(--color-text-muted)]'}`}>
+                    <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isNote ? 'text-yellow-600' : isAgentOrSystem ? 'text-emerald-100' : 'text-[var(--color-text-muted)]'}`}>
+                      {isNote && (
+                        <span className="mr-auto flex items-center gap-1 font-medium">
+                          <AlertCircle size={10} />
+                          Added by {msg.sender_name || 'System'}
+                        </span>
+                      )}
                       {msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      {isAgent && msg.direction === 'OUTBOUND' && (
+                      {isAgentOrSystem && msg.direction === 'OUTBOUND' && (
                         <MessageStatusTicks status={msg.delivery_status} />
                       )}
                     </div>
@@ -498,21 +525,43 @@ export default function MessageThread({ conversationId, conversation, newMessage
             </button>
 
             {isWindowClosed && !isNoteMode ? (
-              <div className="flex-1 min-w-0 py-2.5 sm:py-3 flex items-center gap-2 overflow-hidden bg-[var(--color-bg-base)] pr-2">
-                <AlertCircle size={16} className="text-red-400 shrink-0 hidden sm:block" />
-                <span className="truncate text-xs sm:text-sm text-[var(--color-text-secondary)] shrink-0">Closed:</span>
-                <select
-                  className="bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded px-1.5 py-1 text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 w-full min-w-0 flex-1 truncate"
-                  value={selectedTemplate}
-                  onChange={(e) => setSelectedTemplate(e.target.value)}
-                  disabled={templates.length === 0}
-                >
-                  {templates.length === 0 ? (
-                    <option value="">No templates</option>
-                  ) : (
-                    templates.map((t) => <option key={t.id} value={t.template_name}>{t.template_name}</option>)
-                  )}
-                </select>
+              <div className="flex-1 min-w-0 flex flex-col gap-2 p-2 bg-[var(--color-bg-base)]">
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <AlertCircle size={16} className="text-red-400 shrink-0 hidden sm:block" />
+                  <span className="truncate text-xs sm:text-sm text-[var(--color-text-secondary)] shrink-0">Closed:</span>
+                  <select
+                    className="bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded px-1.5 py-1 text-xs sm:text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 w-full min-w-0 flex-1 truncate"
+                    value={selectedTemplate}
+                    onChange={(e) => setSelectedTemplate(e.target.value)}
+                    disabled={templates.length === 0}
+                  >
+                    {templates.length === 0 ? (
+                      <option value="">No templates</option>
+                    ) : (
+                      templates.map((t) => <option key={t.id} value={t.template_name}>{t.template_name}</option>)
+                    )}
+                  </select>
+                </div>
+                {templateParameters.length > 0 && (
+                  <div className="flex flex-col gap-1.5 px-2 pb-1">
+                    {templateParameters.map((val, idx) => (
+                      <div key={idx} className="flex items-center gap-2">
+                        <span className="text-xs text-[var(--color-text-muted)] w-8 font-mono">{`{{${idx+1}}}`}</span>
+                        <input
+                          type="text"
+                          className="flex-1 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded px-2 py-1 text-xs focus:outline-none focus:border-emerald-400"
+                          placeholder={`Variable ${idx+1}`}
+                          value={val}
+                          onChange={(e) => {
+                            const newParams = [...templateParameters];
+                            newParams[idx] = e.target.value;
+                            setTemplateParameters(newParams);
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : (
               <textarea

@@ -34,6 +34,15 @@ def handle_users():
             "data": user_data
         }), 201
 
+@bp.route('/assignable', methods=['GET'])
+@require_role("ADMIN", "MANAGER", "AGENT")
+def get_assignable_users():
+    users = UserService.get_assignable_users()
+    return jsonify({
+        "status": "success",
+        "data": users
+    }), 200
+
 @bp.route('/<user_id>', methods=['DELETE'])
 @require_role("ADMIN")
 def delete_user(user_id):
@@ -74,6 +83,21 @@ def update_system_status(user_id):
 
     user_ref.update({"system_status": new_status})
 
+    if new_status == "INACTIVE":
+        # Unassign any active chats
+        from app.core.socket_events import socketio
+        convs = list(db.client.collection("conversations")
+            .where("assigned_agent_id", "==", user_id)
+            .where("status", "in", ["OPEN", "PENDING"])
+            .stream())
+        for conv in convs:
+            conv.reference.update({"assigned_agent_id": None})
+            socketio.emit('conversation_assigned', {
+                'conversation_id': conv.id,
+                'assigned_agent_id': None,
+                'assigned_agent_name': None
+            })
+
     return jsonify({
         "status": "success",
         "message": f"Account {'reactivated' if new_status == 'ACTIVE' else 'deactivated'}",
@@ -93,13 +117,18 @@ def update_status(user_id):
     new_status = data['agent_status']
     if new_status not in ["ONLINE", "BUSY", "OFFLINE"]:
         return jsonify({"status": "error", "message": "Invalid agent_status"}), 400
+        
+    reason = data.get('agent_status_reason', 'MANUAL')
 
     from app.db.firebase import db
     user_ref = db.client.collection("users").document(user_id)
     if not user_ref.get().exists:
         return jsonify({"status": "error", "message": "User not found"}), 404
 
-    user_ref.update({"agent_status": new_status})
+    user_ref.update({
+        "agent_status": new_status,
+        "agent_status_reason": reason
+    })
 
     return jsonify({"status": "success", "message": f"Status updated to {new_status}"}), 200
 

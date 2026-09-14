@@ -2,9 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { MessageSquarePlus, Trash2, Plus, Zap } from 'lucide-react';
-import { useRouter } from 'next/navigation';
 import { API_URL } from '@/lib/config';
-import AppShell from '@/components/layout/AppShell';
 import { PageShell } from '@/components/ui/PageShell';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LoadingState } from '@/components/ui/LoadingState';
@@ -12,29 +10,23 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
-import type { CurrentUser } from '@/types/auth';
-
-interface QuickReply {
-  id: string;
-  shortcut: string;
-  message: string;
-  created_at: string;
-}
+import { useQuickRepliesStore } from '@/store/quickRepliesStore';
+import { useAuth } from '@/context/AuthContext';
 
 function QuickRepliesContent() {
-  const [replies, setReplies] = useState<QuickReply[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const { replies, isLoading, error, fetch: fetchReplies, addReply, removeReply } = useQuickRepliesStore();
+  const { user } = useAuth();
+  const canEdit = user?.role === 'ADMIN' || user?.role === 'MANAGER';
+  const [mutationError, setMutationError] = useState('');
 
   const [showAdd, setShowAdd] = useState(false);
   const [newShortcut, setNewShortcut] = useState('');
   const [newMessage, setNewMessage] = useState('');
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [pendingDeleteReply, setPendingDeleteReply] = useState<{ id: string; shortcut: string } | null>(null);
 
-  const [pendingDeleteReply, setPendingDeleteReply] = useState<QuickReply | null>(null);
-
-  const router = useRouter();
+  useEffect(() => { fetchReplies(); }, [fetchReplies]);
 
   const closeAddModal = () => {
     setShowAdd(false);
@@ -43,35 +35,9 @@ function QuickRepliesContent() {
     setFormError('');
   };
 
-  const fetchReplies = async () => {
-    try {
-      const res = await fetch(`${API_URL}/api/admin/quick-replies`, { credentials: 'include' });
-      if (res.status === 401 || res.status === 403) {
-        router.push('/login');
-        return;
-      }
-      const payload = await res.json();
-      if (res.ok) {
-        setReplies(payload.data);
-        setError('');
-      } else {
-        setError(payload.message || 'Failed to load quick replies.');
-      }
-    } catch (err) {
-      setError('An unexpected error occurred.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchReplies();
-  }, [router]);
-
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newShortcut.trim() || !newMessage.trim()) return;
-
     setIsSubmitting(true);
     setFormError('');
     try {
@@ -83,12 +49,12 @@ function QuickRepliesContent() {
       });
       const payload = await res.json();
       if (res.ok) {
-        setReplies([...replies, payload.data]);
+        addReply(payload.data);
         closeAddModal();
       } else {
         setFormError(payload.message || 'Failed to add quick reply');
       }
-    } catch (err) {
+    } catch {
       setFormError('Network error. Please try again.');
     } finally {
       setIsSubmitting(false);
@@ -99,19 +65,16 @@ function QuickRepliesContent() {
     if (!pendingDeleteReply) return;
     const id = pendingDeleteReply.id;
     setPendingDeleteReply(null);
-    setError('');
+    setMutationError('');
     try {
-      const res = await fetch(`${API_URL}/api/admin/quick-replies/${id}`, {
-        method: 'DELETE',
-        credentials: 'include'
-      });
+      const res = await fetch(`${API_URL}/api/admin/quick-replies/${id}`, { method: 'DELETE', credentials: 'include' });
       if (res.ok) {
-        setReplies(replies.filter(r => r.id !== id));
+        removeReply(id);
       } else {
-        setError('Failed to delete quick reply.');
+        setMutationError('Failed to delete quick reply.');
       }
-    } catch (err) {
-      setError('Network error. Please try again.');
+    } catch {
+      setMutationError('Network error. Please try again.');
     }
   };
 
@@ -128,20 +91,22 @@ function QuickRepliesContent() {
           </>
         }
         actions={
-          <Button onClick={() => setShowAdd(true)} className="flex items-center">
-            <Plus className="w-4 h-4 mr-2" />
-            Add Shortcut
-          </Button>
+          canEdit ? (
+            <Button onClick={() => setShowAdd(true)} className="flex items-center">
+              <Plus className="w-4 h-4 mr-2" />
+              Add Shortcut
+            </Button>
+          ) : null
         }
       />
 
-      {error && (
+      {(error || mutationError) && (
         <div className="p-4 bg-red-50 border border-red-200 text-[var(--color-status-error)] rounded-md">
-          {error}
+          {error || mutationError}
         </div>
       )}
 
-      {isLoading ? (
+      {isLoading && replies.length === 0 ? (
         <LoadingState label="Loading quick replies..." />
       ) : (
         <div className="grid gap-4">
@@ -160,13 +125,11 @@ function QuickRepliesContent() {
                   </div>
                   <p className="text-[var(--color-text-primary)] whitespace-pre-wrap">{reply.message}</p>
                 </div>
-                <button
-                  onClick={() => setPendingDeleteReply(reply)}
-                  className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
-                  title="Delete shortcut"
-                >
-                  <Trash2 size={18} />
-                </button>
+                {canEdit && (
+                  <button onClick={() => setPendingDeleteReply(reply)} className="p-2 text-[var(--color-text-muted)] hover:text-[var(--color-status-error)] hover:bg-red-50 rounded-lg transition-colors flex-shrink-0" title="Delete shortcut">
+                    <Trash2 size={18} />
+                  </button>
+                )}
               </div>
             ))
           )}
@@ -174,44 +137,16 @@ function QuickRepliesContent() {
       )}
 
       {showAdd && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-          onClick={closeAddModal}
-        >
-          <div
-            className="bg-[var(--color-bg-surface)] w-full max-w-md rounded-xl shadow-lg p-6"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={closeAddModal}>
+          <div className="bg-[var(--color-bg-surface)] w-full max-w-md rounded-xl shadow-lg p-6" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-xl font-bold text-[var(--color-text-primary)] mb-6">Add Shortcut</h2>
             <form onSubmit={handleAdd} className="space-y-4">
               <div className="relative">
-                <Input
-                  id="shortcut"
-                  label="Shortcut (e.g., hello)"
-                  required
-                  value={newShortcut}
-                  onChange={e => setNewShortcut(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-                  className="pl-8 font-mono"
-                  placeholder="shortcut"
-                />
+                <Input id="shortcut" label="Shortcut (e.g., hello)" required value={newShortcut} onChange={e => setNewShortcut(e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))} className="pl-8 font-mono" placeholder="shortcut" />
                 <span className="absolute left-3 top-[34px] text-[var(--color-text-muted)] font-mono">/</span>
               </div>
-              <Textarea
-                id="message"
-                label="Message"
-                required
-                value={newMessage}
-                onChange={e => setNewMessage(e.target.value)}
-                className="h-24"
-                placeholder="Hi there! How can we help you today?"
-              />
-
-              {formError && (
-                <div className="p-3 text-sm text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-md">
-                  {formError}
-                </div>
-              )}
-
+              <Textarea id="message" label="Message" required value={newMessage} onChange={e => setNewMessage(e.target.value)} className="h-24" placeholder="Hi there! How can we help you today?" />
+              {formError && <div className="p-3 text-sm text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-md">{formError}</div>}
               <div className="pt-2 flex justify-end space-x-3">
                 <Button type="button" variant="ghost" onClick={closeAddModal}>Cancel</Button>
                 <Button type="submit" isLoading={isSubmitting}>Save Quick Reply</Button>
@@ -224,11 +159,7 @@ function QuickRepliesContent() {
       {pendingDeleteReply && (
         <ConfirmModal
           title="Delete this quick reply?"
-          description={
-            <>
-              The shortcut <span className="font-mono font-medium text-[var(--color-text-primary)]">/{pendingDeleteReply.shortcut}</span> will no longer be available to any agent. This can&apos;t be undone.
-            </>
-          }
+          description={<>The shortcut <span className="font-mono font-medium text-[var(--color-text-primary)]">/{pendingDeleteReply.shortcut}</span> will no longer be available to any agent. This can&apos;t be undone.</>}
           confirmLabel="Delete"
           onConfirm={handleDelete}
           onCancel={() => setPendingDeleteReply(null)}
@@ -242,9 +173,7 @@ function NotAuthorized() {
   return (
     <div className="h-full flex items-center justify-center bg-[var(--color-bg-base)]">
       <div className="text-center">
-        <div className="w-16 h-16 bg-red-50 text-[var(--color-status-error)] rounded-full flex items-center justify-center mx-auto mb-4">
-          <Zap size={32} />
-        </div>
+        <div className="w-16 h-16 bg-red-50 text-[var(--color-status-error)] rounded-full flex items-center justify-center mx-auto mb-4"><Zap size={32} /></div>
         <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Access Restricted</h2>
         <p className="text-[var(--color-text-secondary)] mt-2">Only administrators can manage quick replies.</p>
       </div>
@@ -253,9 +182,7 @@ function NotAuthorized() {
 }
 
 export default function QuickRepliesPage() {
-  return (
-    <AppShell>
-      {(user: CurrentUser) => (user.role === 'ADMIN' ? <QuickRepliesContent /> : <NotAuthorized />)}
-    </AppShell>
-  );
+  const { user } = useAuth();
+  if (!user) return null;
+  return ['ADMIN', 'MANAGER', 'AGENT'].includes(user.role) ? <QuickRepliesContent /> : <NotAuthorized />;
 }

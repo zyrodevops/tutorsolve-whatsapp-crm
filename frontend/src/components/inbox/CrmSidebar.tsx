@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Info, User, Clock, Copy, Check } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Info, User, Clock, Copy, Check, ChevronDown, Circle } from 'lucide-react';
 import type { Conversation } from '@/types/inbox';
 import type { CurrentUser } from '@/types/auth';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -10,6 +10,7 @@ interface CrmSidebarProps {
   onAddNote?: () => void;
   onStatusChange?: (conversationId: string, newStatus: Conversation['status']) => void;
   onTagsChange?: (conversationId: string, tags: string[]) => void;
+  onAssignChange?: (conversationId: string, agentId: string | null, agentName: string | null) => void;
 }
 
 import { API_URL } from '@/lib/config';
@@ -20,12 +21,15 @@ interface MasterTag {
   color_hex: string;
 }
 
-export default function CrmSidebar({ conversation, currentUser, onAddNote, onStatusChange, onTagsChange }: CrmSidebarProps) {
+export default function CrmSidebar({ conversation, currentUser, onAddNote, onStatusChange, onTagsChange, onAssignChange }: CrmSidebarProps) {
   const [copied, setCopied] = useState(false);
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [localTags, setLocalTags] = useState<string[]>([]);
   const [isUpdating, setIsUpdating] = useState(false);
   const [masterTags, setMasterTags] = useState<MasterTag[]>([]);
+  const [assignableUsers, setAssignableUsers] = useState<any[]>([]);
+  const [isAssigning, setIsAssigning] = useState(false);
+  const [showAssignDropdown, setShowAssignDropdown] = useState(false);
 
   React.useEffect(() => {
     const fetchMasterTags = async () => {
@@ -41,7 +45,23 @@ export default function CrmSidebar({ conversation, currentUser, onAddNote, onSta
         console.error('Failed to fetch tags', err);
       }
     };
+
+    const fetchAssignableUsers = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/users/assignable`, { credentials: 'include' });
+        if (res.ok) {
+          const body = await res.json();
+          if (Array.isArray(body.data)) {
+            setAssignableUsers(body.data);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch assignable users', err);
+      }
+    };
+
     fetchMasterTags();
+    fetchAssignableUsers();
   }, []);
   const [revealedNumber, setRevealedNumber] = useState<string | null>(null);
   const [isRevealing, setIsRevealing] = useState(false);
@@ -68,6 +88,28 @@ export default function CrmSidebar({ conversation, currentUser, onAddNote, onSta
     setResolveError('');
     setShowResolveConfirm(false);
   }, [conversation?.id]);
+
+  const handleAssign = async (agentId: string | null, agentName: string | null = null) => {
+    if (!conversation) return;
+    setIsAssigning(true);
+    try {
+      const res = await fetch(`${API_URL}/api/conversations/${conversation.id}/assign`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ assigned_agent_id: agentId })
+      });
+      if (res.ok) {
+        onAssignChange?.(conversation.id, agentId, agentName);
+      } else {
+        console.error("Failed to assign agent");
+      }
+    } catch (err) {
+      console.error('Failed to assign agent', err);
+    } finally {
+      setIsAssigning(false);
+    }
+  };
 
   const handleUpdateTags = async (updatedTags: string[]) => {
     if (!conversation) return;
@@ -143,6 +185,25 @@ export default function CrmSidebar({ conversation, currentUser, onAddNote, onSta
       setResolveError('Network error');
     } finally {
       setIsMarkingResolved(false);
+    }
+  };
+
+  const handleReopenChat = async () => {
+    if (!conversation) return;
+    try {
+      const res = await fetch(`${API_URL}/api/conversations/${conversation.id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ status: 'OPEN' })
+      });
+      if (res.ok) {
+        onStatusChange?.(conversation.id, 'OPEN');
+      } else {
+        console.error('Failed to reopen chat');
+      }
+    } catch (err) {
+      console.error('Network error', err);
     }
   };
 
@@ -320,20 +381,101 @@ export default function CrmSidebar({ conversation, currentUser, onAddNote, onSta
             }`}>
               {conversation.status}
             </span>
+            {conversation.status === 'RESOLVED' && ['ADMIN', 'MANAGER'].includes(currentUser.role) && (
+              <button
+                onClick={handleReopenChat}
+                className="px-3 py-1.5 rounded-full text-xs font-bold bg-white border border-[var(--color-brand-primary)] text-[var(--color-brand-primary)] hover:bg-emerald-50 transition-colors ml-auto"
+                title="Reopen Chat"
+              >
+                Reopen
+              </button>
+            )}
           </div>
         </div>
 
         {/* Assigned Agent */}
         <div>
           <h4 className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-3">Assigned Agent</h4>
-          <div className="flex items-center gap-2 text-sm font-medium bg-[var(--color-bg-base)] p-3 rounded-xl border border-[var(--color-border-subtle)]">
-            <User size={16} className="text-[var(--color-text-muted)]" />
-            {conversation.assigned_agent_name ? (
-              <span className="text-[var(--color-text-primary)]">{conversation.assigned_agent_name}</span>
+          
+          <div className="relative">
+            {currentUser.role !== 'AGENT' ? (
+              <button 
+                onClick={() => setShowAssignDropdown(!showAssignDropdown)}
+                disabled={isAssigning}
+                className="w-full flex items-center justify-between text-sm font-medium bg-[var(--color-bg-base)] p-3 rounded-xl border border-[var(--color-border-subtle)] hover:border-[var(--color-brand-primary)] transition-colors disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <User size={16} className="text-[var(--color-text-muted)]" />
+                  {conversation.assigned_agent_name ? (
+                    <span className="text-[var(--color-text-primary)]">{conversation.assigned_agent_name}</span>
+                  ) : (
+                    <span className="text-[var(--color-text-muted)] italic">Unassigned</span>
+                  )}
+                </div>
+                <ChevronDown size={16} className={`text-[var(--color-text-muted)] transition-transform ${showAssignDropdown ? 'rotate-180' : ''}`} />
+              </button>
             ) : (
-              <span className="text-[var(--color-text-muted)] italic">Unassigned</span>
+              <div className="w-full flex items-center justify-between text-sm font-medium bg-[var(--color-bg-base)] p-3 rounded-xl border border-[var(--color-border-subtle)]">
+                <div className="flex items-center gap-2">
+                  <User size={16} className="text-[var(--color-text-muted)]" />
+                  {conversation.assigned_agent_name ? (
+                    <span className="text-[var(--color-text-primary)]">{conversation.assigned_agent_name}</span>
+                  ) : (
+                    <span className="text-[var(--color-text-muted)] italic">Unassigned</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {showAssignDropdown && currentUser.role !== 'AGENT' && (
+              <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-[var(--color-border-subtle)] shadow-xl rounded-xl p-2 flex flex-col gap-1 z-50 max-h-48 overflow-y-auto">
+                <button 
+                  onClick={() => {
+                    handleAssign(null, null);
+                    setShowAssignDropdown(false);
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-lg text-left transition-colors"
+                >
+                  <span className="italic text-gray-500">Unassign</span>
+                </button>
+                <div className="h-px bg-gray-100 my-1"></div>
+                {assignableUsers
+                  .filter(u => {
+                    if ((currentUser.role === 'ADMIN' || currentUser.role === 'MANAGER') && u.id === currentUser.id) return false;
+                    if (currentUser.role === 'MANAGER' && u.role !== 'AGENT') return false;
+                    return true;
+                  })
+                  .map(u => (
+                  <button 
+                    key={u.id}
+                    onClick={() => {
+                      handleAssign(u.id, u.full_name);
+                      setShowAssignDropdown(false);
+                    }}
+                    className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg text-left transition-colors ${
+                      conversation.assigned_agent_id === u.id ? 'bg-emerald-50 text-[var(--color-brand-primary)]' : 'text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <Circle size={8} className={`${u.agent_status === 'ONLINE' ? 'fill-emerald-500 text-emerald-500' : u.agent_status === 'BUSY' ? 'fill-orange-500 text-orange-500' : 'fill-gray-400 text-gray-400'}`} />
+                    <div className="flex flex-col">
+                      <span>{u.full_name}</span>
+                      <span className="text-[10px] text-gray-500 font-mono">{u.email}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
             )}
           </div>
+          
+          {!conversation.assigned_agent_id && (
+            <button
+              onClick={() => handleAssign(currentUser.id, currentUser.full_name)}
+              disabled={isAssigning}
+              className="mt-2 w-full py-2 bg-[var(--color-brand-primary)] text-white rounded-lg text-sm font-semibold hover:bg-[var(--color-brand-hover)] transition-colors disabled:opacity-50"
+            >
+              Claim Chat
+            </button>
+          )}
         </div>
 
         {/* Activity */}

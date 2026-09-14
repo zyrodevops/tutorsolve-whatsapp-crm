@@ -30,7 +30,7 @@ class ContactSchema(Schema):
         unknown = EXCLUDE
 
 class ValueSchema(Schema):
-    messaging_product = fields.Str(required=True)
+    messaging_product = fields.Str(required=False, allow_none=True)
     contacts = fields.List(fields.Nested(ContactSchema), required=False)
     messages = fields.List(fields.Nested(MessageSchema), required=False)
     statuses = fields.List(fields.Dict(), required=False)

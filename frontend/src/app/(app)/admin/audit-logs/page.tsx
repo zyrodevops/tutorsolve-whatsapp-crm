@@ -1,24 +1,12 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect } from 'react';
 import { ShieldAlert } from 'lucide-react';
-import { useRouter } from 'next/navigation';
-import { API_URL } from '@/lib/config';
-import AppShell from '@/components/layout/AppShell';
 import { PageShell } from '@/components/ui/PageShell';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { LoadingState } from '@/components/ui/LoadingState';
-import type { CurrentUser } from '@/types/auth';
-
-interface AuditLogEntry {
-  id: string;
-  action: string;
-  entity_type: string;
-  entity_id: string;
-  ip_address: string;
-  timestamp: string;
-  user: { full_name: string; email: string | null };
-}
+import { useAuditLogsStore } from '@/store/auditLogsStore';
+import { useAuth } from '@/context/AuthContext';
 
 function formatTimestamp(iso: string): string {
   return new Date(iso).toLocaleString([], {
@@ -27,37 +15,9 @@ function formatTimestamp(iso: string): string {
 }
 
 function AuditLogsContent() {
-  const [entries, setEntries] = useState<AuditLogEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
-  const router = useRouter();
+  const { entries, isLoading, error, fetch: fetchLogs } = useAuditLogsStore();
 
-  useEffect(() => {
-    const fetchLogs = async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/admin/audit-logs`, { credentials: 'include' });
-
-        if (res.status === 401 || res.status === 403) {
-          router.push('/login');
-          return;
-        }
-
-        const payload = await res.json();
-        if (res.ok) {
-          setEntries(payload.data);
-        } else {
-          setError(payload.message || 'Failed to load audit logs.');
-        }
-      } catch (err) {
-        console.error('Failed to fetch audit logs', err);
-        setError('An unexpected error occurred.');
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchLogs();
-  }, [router]);
+  useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   return (
     <PageShell>
@@ -74,7 +34,7 @@ function AuditLogsContent() {
       )}
 
       <div className="bg-[var(--color-bg-surface)] rounded-xl border border-[var(--color-border-subtle)] overflow-hidden">
-        {isLoading ? (
+        {isLoading && entries.length === 0 ? (
           <LoadingState label="Loading audit log..." />
         ) : entries.length === 0 ? (
           <div className="p-16 flex flex-col items-center justify-center text-center">
@@ -130,9 +90,7 @@ function AuditLogsContent() {
               {entries.map((entry) => (
                 <div key={entry.id} className="p-4 flex flex-col gap-2">
                   <div className="flex justify-between items-start">
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-50 text-red-700">
-                      {entry.action}
-                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-50 text-red-700">{entry.action}</span>
                     <span className="text-[10px] text-[var(--color-text-muted)]">{formatTimestamp(entry.timestamp)}</span>
                   </div>
                   <p className="text-sm font-medium text-[var(--color-text-primary)]">{entry.user.full_name}</p>
@@ -154,9 +112,7 @@ function NotAuthorized() {
   return (
     <div className="h-full flex items-center justify-center bg-[var(--color-bg-base)]">
       <div className="text-center">
-        <div className="w-16 h-16 bg-red-50 text-[var(--color-status-error)] rounded-full flex items-center justify-center mx-auto mb-4">
-          <ShieldAlert size={32} />
-        </div>
+        <div className="w-16 h-16 bg-red-50 text-[var(--color-status-error)] rounded-full flex items-center justify-center mx-auto mb-4"><ShieldAlert size={32} /></div>
         <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Access Restricted</h2>
         <p className="text-[var(--color-text-secondary)] mt-2">Only administrators can view the audit log.</p>
       </div>
@@ -165,9 +121,7 @@ function NotAuthorized() {
 }
 
 export default function AuditLogsPage() {
-  return (
-    <AppShell>
-      {(user: CurrentUser) => (user.role === 'ADMIN' ? <AuditLogsContent /> : <NotAuthorized />)}
-    </AppShell>
-  );
+  const { user } = useAuth();
+  if (!user) return null;
+  return user.role === 'ADMIN' ? <AuditLogsContent /> : <NotAuthorized />;
 }

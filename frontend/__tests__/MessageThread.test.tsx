@@ -32,7 +32,7 @@ describe('MessageThread Component', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText(/type an internal note/i)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText(/Note\.\.\./i)).toBeInTheDocument();
     });
 
     // Toggling the note button must report back through the callback,
@@ -397,7 +397,7 @@ describe('MessageThread Component', () => {
     const { rerender } = render(<MessageThread conversationId="conv_1" isNoteMode={true} />);
     await waitFor(() => expect(screen.getByText('Hello')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByPlaceholderText(/type an internal note/i), { target: { value: 'yay' } });
+    fireEvent.change(screen.getByPlaceholderText(/Note\.\.\./i), { target: { value: 'yay' } });
     fireEvent.click(screen.getByRole('button', { name: /save note/i }));
 
     // The socketio broadcast (with no exclusion for the sender) arrives first.

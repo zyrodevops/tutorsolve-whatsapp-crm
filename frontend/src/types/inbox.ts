@@ -23,6 +23,7 @@ export interface Message {
   media_mime_type?: string | null;
   delivery_status: string;
   timestamp: string;
+  sender_name?: string | null;
 }
 
 export interface NewMessagePayload {

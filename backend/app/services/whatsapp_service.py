@@ -75,18 +75,54 @@ def _is_within_business_hours(settings: dict, now: datetime | None = None) -> bo
     # Overnight window (e.g. 22:00 -> 06:00) wraps past midnight.
     return now_minutes >= start_minutes or now_minutes < end_minutes
 
-def _pick_next_agent_id(sorted_agent_ids: list[str], last_assigned_id: str | None) -> str | None:
+def _pick_least_loaded_agent(active_agents: list[dict], all_open_convs: list[dict]) -> str | None:
     """
-    Rotates through agents in a fixed order rather than picking randomly, so
-    load is distributed evenly instead of unpredictably. Wraps back to the
-    start once the last-assigned agent is no longer online (e.g. went offline).
+    Implements a Least Loaded assignment algorithm with Tie Breaking and Fallback.
+    1. Filter ONLINE agents.
+    2. Compute active chats for each agent based on all_open_convs.
+    3. Tie-break using last_assigned_at.
+    4. If no ONLINE agents, fallback to BUSY agents where agent_status_reason == 'CAPACITY'.
     """
-    if not sorted_agent_ids:
+    if not active_agents:
         return None
-    if last_assigned_id in sorted_agent_ids:
-        idx = sorted_agent_ids.index(last_assigned_id)
-        return sorted_agent_ids[(idx + 1) % len(sorted_agent_ids)]
-    return sorted_agent_ids[0]
+
+    # Count active chats for each agent based on open conversations in the last 24h
+    active_counts = {a["id"]: 0 for a in active_agents}
+    now = datetime.now(timezone.utc)
+    for conv in all_open_convs:
+        agent_id = conv.get("assigned_agent_id")
+        if agent_id in active_counts:
+            last_msg_at = conv.get("last_message_at")
+            if last_msg_at:
+                if last_msg_at.tzinfo is None:
+                    last_msg_at = last_msg_at.replace(tzinfo=timezone.utc)
+                if now - last_msg_at < timedelta(hours=24):
+                    active_counts[agent_id] += 1
+
+    # Define a sorting key: (active_chats, last_assigned_at)
+    def sort_key(agent):
+        last_assigned = agent.get("last_assigned_at")
+        if last_assigned is None:
+            # If never assigned, prioritize them by giving them an ancient timestamp
+            last_assigned = datetime.min.replace(tzinfo=timezone.utc)
+        elif last_assigned.tzinfo is None:
+            last_assigned = last_assigned.replace(tzinfo=timezone.utc)
+        return (active_counts[agent["id"]], last_assigned)
+
+    # 1. Try ONLINE agents
+    online_agents = [a for a in active_agents if a.get("agent_status") == "ONLINE"]
+    if online_agents:
+        best_agent = min(online_agents, key=sort_key)
+        return best_agent["id"]
+
+    # 2. Fallback to BUSY agents (only if blocked by CAPACITY)
+    busy_agents = [a for a in active_agents if a.get("agent_status") == "BUSY" and a.get("agent_status_reason") == "CAPACITY"]
+    if busy_agents:
+        best_agent = min(busy_agents, key=sort_key)
+        return best_agent["id"]
+
+    # 3. No one available
+    return None
 
 # Meta's status webhooks don't guarantee delivery order, so a status can only
 # move a message forward through this progression -- a late "delivered" must
@@ -178,23 +214,30 @@ class WhatsAppService:
             query = convs_ref.where("customer_id", "==", phone_hash_val).limit(1)
             results = list(query.stream(transaction=transaction))
 
-            online_agents = []
-            last_assigned_agent_id = None
+            active_agents = []
+            all_open_convs = []
             round_robin_enabled = True
             if not results:
-                online_agents = list(
+                # Fetch all ACTIVE agents (exclude Managers)
+                active_agents = [
+                    doc.to_dict() | {"id": doc.id} for doc in 
                     db.client.collection("users")
                     .where("system_status", "==", "ACTIVE")
-                    .where("agent_status", "==", "ONLINE")
+                    .where("role", "==", "AGENT")
                     .stream(transaction=transaction)
-                )
-                routing_state_snapshot = next(transaction.get(routing_state_ref))
-                if routing_state_snapshot.exists:
-                    last_assigned_agent_id = routing_state_snapshot.to_dict().get("last_assigned_agent_id")
-
+                ]
+                
                 settings_snapshot = next(transaction.get(business_settings_ref))
                 if settings_snapshot.exists:
                     round_robin_enabled = settings_snapshot.to_dict().get("round_robin_enabled", True)
+                
+                if round_robin_enabled and active_agents:
+                    all_open_convs = [
+                        doc.to_dict() for doc in 
+                        db.client.collection("conversations")
+                        .where("status", "in", ["OPEN", "PENDING"])
+                        .stream(transaction=transaction)
+                    ]
 
             # --- Pure decision-making over the data we already read. ---
             is_new_window = False
@@ -232,8 +275,7 @@ class WhatsAppService:
             if not results:
                 assigned_agent_id = None
                 if round_robin_enabled:
-                    sorted_agent_ids = sorted(agent_doc.id for agent_doc in online_agents)
-                    assigned_agent_id = _pick_next_agent_id(sorted_agent_ids, last_assigned_agent_id)
+                    assigned_agent_id = _pick_least_loaded_agent(active_agents, all_open_convs)
                 conversation = Conversation(
                     customer_id=phone_hash_val,
                     status="OPEN",
@@ -242,7 +284,9 @@ class WhatsAppService:
                 conv_id = conversation.id
                 transaction.set(convs_ref.document(conv_id), conversation.to_dict())
                 if assigned_agent_id:
-                    transaction.set(routing_state_ref, {"last_assigned_agent_id": assigned_agent_id}, merge=True)
+                    # Update the agent's last_assigned_at timestamp
+                    agent_ref = db.client.collection("users").document(assigned_agent_id)
+                    transaction.update(agent_ref, {"last_assigned_at": datetime.now(timezone.utc)})
             elif needs_reopen:
                 transaction.update(convs_ref.document(conv_id), {"status": "OPEN"})
 
@@ -510,7 +554,7 @@ class WhatsAppService:
             return False, f"Failed to send message: {err_msg}"
 
     @staticmethod
-    def send_template_message(conversation_id: str, template_name: str, language_code: str = "en_US", sender_id: str | None = None) -> tuple[bool, str | None]:
+    def send_template_message(conversation_id: str, template_name: str, language_code: str = "en_US", sender_id: str | None = None, parameters: list[str] | None = None) -> tuple[bool, str | None]:
         convs_ref = db.client.collection("conversations")
         conv_doc = convs_ref.document(conversation_id).get()
 
@@ -544,6 +588,14 @@ class WhatsAppService:
                 }
             }
         }
+        
+        if parameters:
+            payload["template"]["components"] = [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": str(val)} for val in parameters]
+                }
+            ]
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=10)

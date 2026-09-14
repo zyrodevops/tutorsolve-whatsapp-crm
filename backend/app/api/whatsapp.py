@@ -46,6 +46,41 @@ def webhook():
             change = entry['changes'][0]
             value = change['value']
 
+            # Edge Case 1: Template Status Update
+            if change.get('field') == 'message_template_status_update':
+                event = value.get('event')
+                template_id = value.get('message_template_id')
+                template_name = value.get('message_template_name')
+                language = value.get('message_template_language')
+                
+                if template_id and template_name and language and event:
+                    from app.db.firebase import db
+                    
+                    try:
+                        docs = list(db.client.collection("meta_templates")
+                                    .where("template_name", "==", template_name)
+                                    .where("language_code", "==", language)
+                                    .limit(1)
+                                    .stream())
+                        
+                        if docs:
+                            docs[0].reference.update({
+                                "status": event,
+                                "meta_template_id": str(template_id)
+                            })
+                        else:
+                            db.client.collection("meta_templates").add({
+                                "template_name": template_name,
+                                "meta_template_id": str(template_id),
+                                "language_code": language,
+                                "status": event,
+                                "body": "" # Body isn't provided in the webhook
+                            })
+                    except Exception:
+                        logger.exception("Failed to process template status update")
+                
+                return jsonify({"status": "success"}), 200
+
             # Edge Case 1: Status Updates (read receipts, delivery)
             if 'statuses' in value and value['statuses']:
                 status_obj = value['statuses'][0]
