@@ -8,14 +8,6 @@ import { LoadingState } from '@/components/ui/LoadingState';
 import { useAnalyticsStore } from '@/store/analyticsStore';
 import { useAuth } from '@/context/AuthContext';
 
-function formatResponseTime(seconds: number | null): string {
-  if (seconds === null) return 'N/A';
-  const totalMinutes = Math.round(seconds / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
-}
-
 function AnalyticsContent() {
   const { data, isLoading, error, fetch: fetchAnalytics } = useAnalyticsStore();
 
@@ -39,7 +31,7 @@ function AnalyticsContent() {
       {isLoading && !data ? (
         <LoadingState label="Aggregating metrics..." />
       ) : data ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-6">
           <StatCard
             title="Total Agents"
             value={data.total_agents}
@@ -63,12 +55,6 @@ function AnalyticsContent() {
             value={data.resolved_conversations}
             subtitle="Successfully closed"
             icon={<CheckCircle2 className="w-6 h-6 text-[var(--color-brand-primary)]" />}
-          />
-          <StatCard
-            title="Avg. Response Time"
-            value={formatResponseTime(data.avg_response_time_seconds)}
-            subtitle="Customer message to agent reply"
-            icon={<Timer className="w-6 h-6 text-[var(--color-brand-primary)]" />}
           />
         </div>
       ) : null}

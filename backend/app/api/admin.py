@@ -4,6 +4,7 @@ from flask import Blueprint, jsonify, request, g
 from app.db.firebase import db
 from firebase_admin import firestore
 from google.cloud.firestore_v1 import Query
+from google.cloud.firestore_v1.base_query import FieldFilter
 from app.core.security import decrypt_phone
 from app.core.auth_middleware import require_role
 from datetime import datetime, timezone
@@ -25,8 +26,11 @@ def _calculate_avg_response_time_seconds() -> float | None:
     averages -- a conversation with many quick exchanges should weigh in
     proportionally to how many replies it took, not get diluted to one point.
     """
+    from datetime import timedelta, datetime
+    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+
     response_gaps_seconds = []
-    conversations = db.client.collection("conversations").stream()
+    conversations = db.client.collection("conversations").where("last_message_at", ">=", thirty_days_ago).stream()
     for conv in conversations:
         msgs = (
             db.client.collection("messages")
@@ -39,7 +43,8 @@ def _calculate_avg_response_time_seconds() -> float | None:
             m = m_doc.to_dict()
             if m.get("sender_type") == "CUSTOMER" and m.get("direction") == "INBOUND":
                 if pending_customer_ts is None:
-                    pending_customer_ts = m.get("timestamp")
+                    if _as_utc(m.get("timestamp")) >= thirty_days_ago:
+                        pending_customer_ts = m.get("timestamp")
             elif m.get("sender_type") == "AGENT" and m.get("direction") == "OUTBOUND":
                 if pending_customer_ts is not None:
                     delta = (_as_utc(m.get("timestamp")) - _as_utc(pending_customer_ts)).total_seconds()
@@ -56,8 +61,8 @@ def _calculate_avg_response_time_seconds() -> float | None:
 def get_analytics():
     try:
         users = list(db.client.collection("users").stream())
-        total_agents = len([u for u in users if u.to_dict().get("role") == "AGENT"])
-        online_agents = len([u for u in users if u.to_dict().get("role") == "AGENT" and u.to_dict().get("agent_status") == "ONLINE"])
+        total_agents = len(users)
+        online_agents = len([u for u in users if u.to_dict().get("agent_status") == "ONLINE"])
 
         conversations = list(db.client.collection("conversations").stream())
         total_conversations = len(conversations)

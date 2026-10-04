@@ -10,7 +10,7 @@ const plusJakartaSans = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "WhatsApp CRM Dashboard",
+  title: "TutorSolve CRM",
   description: "A centralized WhatsApp CRM for support teams.",
 };
 
@@ -21,6 +21,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${plusJakartaSans.variable} h-full antialiased`}>
+      <head>
+        <meta name="apple-mobile-web-app-title" content="TutorSolve" />
+      </head>
       <body className="min-h-full flex flex-col">
         <FetchInterceptor />
         {children}

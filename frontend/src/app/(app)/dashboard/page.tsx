@@ -11,7 +11,7 @@ import type { CurrentUser } from '@/types/auth';
 import type { Conversation } from '@/types/inbox';
 
 function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
-  const { conversations, setConversations, loadError, newMessage, messageStatusUpdate, isConnected, markAsRead, isLoading, hasMore, fetchNextPage } = useInbox();
+  const { conversations, setConversations, loadError, newMessage, messageStatusUpdate, isConnected, markAsRead, isLoading, isFetchingMore, hasMore, fetchNextPage } = useInbox();
 
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [isNoteMode, setIsNoteMode] = useState(false);
@@ -68,7 +68,6 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
   const handleSelectChat = (id: string) => {
     setActiveChat(id);
     setIsNoteMode(false); // Note-composing state shouldn't carry over to a different conversation.
-    markAsRead(id); // Optimistic UI update
   };
 
   const handleAddNote = () => {
@@ -118,6 +117,7 @@ function InboxContent({ currentUser }: { currentUser: CurrentUser }) {
           }}
           isSocketConnected={isConnected}
           isLoading={isLoading}
+          isFetchingMore={isFetchingMore}
           hasMore={hasMore}
           fetchNextPage={fetchNextPage}
         />

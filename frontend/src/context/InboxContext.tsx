@@ -21,6 +21,7 @@ interface InboxContextType {
   markAsRead: (conversationId: string) => void;
   isConnected: boolean;
   isLoading: boolean;
+  isFetchingMore: boolean;
   hasMore: boolean;
   fetchNextPage: () => Promise<void>;
 }
@@ -33,7 +34,9 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
   const [newMessage, setNewMessage] = useState<NewMessagePayload | null>(null);
   const [messageStatusUpdate, setMessageStatusUpdate] = useState<MessageStatusUpdatePayload | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+  const [totalUnreadCount, setTotalUnreadCount] = useState(0);
   const isFetchingRef = useRef(false);
 
   const { on, off, isConnected } = useSocket();
@@ -43,6 +46,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
     isFetchingRef.current = true;
     
     if (reset) setIsLoading(true);
+    else setIsFetchingMore(true);
 
     try {
       let url = `${API_URL}/api/conversations?limit=20`;
@@ -56,6 +60,9 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
         
         if (reset) {
           setConversations(body.data);
+          if (body.total_unread !== undefined) {
+            setTotalUnreadCount(body.total_unread);
+          }
         } else {
           setConversations(prev => {
             const newConvs = body.data.filter((newC: Conversation) => !prev.find(p => p.id === newC.id));
@@ -72,6 +79,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       setLoadError('Failed to load conversations.');
     } finally {
       setIsLoading(false);
+      setIsFetchingMore(false);
       isFetchingRef.current = false;
     }
   }, []);
@@ -115,11 +123,15 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
           // If from an agent, keep unread as is (since agents don't increment unread for themselves).
           const isCustomer = message.sender_type === 'CUSTOMER';
           
+          if (isCustomer && (convExists.unread_count || 0) === 0) {
+            setTotalUnreadCount(prev => prev + 1);
+          }
+
           return prev.map((c) =>
             c.id === conversation_id
               ? { 
                   ...c, 
-                  last_message_preview: (message.text_body ?? '').substring(0, 50), 
+                  last_message_preview: message.preview || (message.text_body ?? '').substring(0, 50), 
                   unread_count: isCustomer ? (c.unread_count || 0) + 1 : c.unread_count, 
                   last_message_at: message.timestamp 
                 }
@@ -157,12 +169,14 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
   }, [on, off, fetchConversations]);
 
   const markAsRead = useCallback((conversationId: string) => {
-    setConversations((prev) => 
-      prev.map(c => c.id === conversationId ? { ...c, unread_count: 0 } : c)
-    );
+    setConversations((prev) => {
+      const conv = prev.find(c => c.id === conversationId);
+      if (conv && (conv.unread_count || 0) > 0) {
+        setTotalUnreadCount(count => Math.max(0, count - 1));
+      }
+      return prev.map(c => c.id === conversationId ? { ...c, unread_count: 0 } : c);
+    });
   }, []);
-
-  const totalUnreadCount = conversations.reduce((acc, curr) => acc + (curr.unread_count || 0), 0);
 
   return (
     <InboxContext.Provider value={{ 
@@ -175,6 +189,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       markAsRead,
       isConnected,
       isLoading,
+      isFetchingMore,
       hasMore,
       fetchNextPage
     }}>

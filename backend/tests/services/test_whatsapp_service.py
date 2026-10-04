@@ -81,7 +81,7 @@ def test_send_message_success(app, mock_db_client, mocker, monkeypatch):
         sender_id="agent-1"
     )
 
-    assert success is True
+    assert isinstance(success, dict)
     assert error is None
 
     mock_post.assert_called_once()
@@ -132,7 +132,7 @@ def test_send_message_broadcasts_over_websocket(app, mock_db_client, mocker, mon
         sender_id="agent-2"
     )
 
-    assert success is True
+    assert isinstance(success, dict)
     mock_emit.assert_called_once()
     event_name, payload = mock_emit.call_args[0]
     assert event_name == "new_message"
@@ -535,7 +535,7 @@ def test_send_media_message_without_caption_gets_friendly_preview(app, mock_db_c
         sender_id="agent-1"
     )
 
-    assert success is True, error
+    assert isinstance(success, dict), error
     refreshed = mock_db_client.collection("conversations").document(conversation.id).get().to_dict()
     assert refreshed["last_message_preview"] not in ("", "[DOCUMENT]")
     assert "Document" in refreshed["last_message_preview"]

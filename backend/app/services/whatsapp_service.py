@@ -338,7 +338,8 @@ class WhatsAppService:
                 'direction': 'INBOUND',
                 'sender_type': 'CUSTOMER',
                 'message_type': message_type,
-                'timestamp': now.isoformat()
+                'timestamp': now.isoformat(),
+                'preview': preview
             }
         })
         
@@ -403,8 +404,9 @@ class WhatsAppService:
             db.client.collection("messages").document(outbound_msg.id).set(outbound_msg.to_dict())
 
             now = datetime.now(timezone.utc)
+            preview = _build_message_preview(text, "TEXT")
             convs_ref.document(conversation_id).update({
-                "last_message_preview": _build_message_preview(text, "TEXT"),
+                "last_message_preview": preview,
                 "last_message_at": now
             })
 
@@ -416,11 +418,12 @@ class WhatsAppService:
                     'text_body': text,
                     'direction': 'OUTBOUND',
                     'sender_type': 'AGENT',
-                    'timestamp': now.isoformat()
+                    'timestamp': now.isoformat(),
+                    'preview': preview
                 }
             })
 
-            return True, None
+            return outbound_msg.to_dict(), None
 
         except requests.exceptions.RequestException as e:
             status = getattr(e.response, "status_code", 500)
@@ -540,11 +543,12 @@ class WhatsAppService:
                     'direction': 'OUTBOUND',
                     'sender_type': 'AGENT',
                     'message_type': msg_type.upper(),
-                    'timestamp': now.isoformat()
+                    'timestamp': now.isoformat(),
+                    'preview': preview
                 }
             })
 
-            return True, None
+            return outbound_msg.to_dict(), None
 
         except requests.exceptions.RequestException as e:
             status = getattr(e.response, "status_code", 500)
@@ -614,8 +618,9 @@ class WhatsAppService:
             db.client.collection("messages").document(outbound_msg.id).set(outbound_msg.to_dict())
 
             now = datetime.now(timezone.utc)
+            preview = f"Template: {template_name}"
             convs_ref.document(conversation_id).update({
-                "last_message_preview": f"Template: {template_name}",
+                "last_message_preview": preview,
                 "last_message_at": now
             })
 
@@ -628,11 +633,12 @@ class WhatsAppService:
                     'direction': 'OUTBOUND',
                     'sender_type': 'AGENT',
                     'message_type': 'TEMPLATE',
-                    'timestamp': now.isoformat()
+                    'timestamp': now.isoformat(),
+                    'preview': preview
                 }
             })
 
-            return True, None
+            return outbound_msg.to_dict(), None
 
         except requests.exceptions.RequestException as e:
             status = getattr(e.response, "status_code", 500)

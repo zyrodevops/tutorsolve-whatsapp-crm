@@ -20,9 +20,10 @@ class EmailService:
         from_email = os.environ.get("SENDGRID_FROM_EMAIL", "noreply@whatsappcrm.com")
 
         # If no real API key is configured (dev mode), skip the real send.
-        # Never log the setup link itself, even in dev -- it's a live credential.
+        # In dev mode, we log the setup link so the developer can test the flow locally.
         if api_key == "dummy_dev_key":
             logger.info("[DEV MODE] Skipping real welcome email to %s (SENDGRID_API_KEY not configured).", to_email)
+            logger.info("[DEV MODE] Welcome Setup Link: %s", setup_link)
             return True
 
         message = Mail(
@@ -41,8 +42,11 @@ class EmailService:
             sg = SendGridAPIClient(api_key)
             sg.send(message)
             return True
-        except Exception:
-            logger.exception("Failed to send welcome email to %s", to_email)
+        except Exception as e:
+            error_details = getattr(e, 'body', None) or str(e)
+            status_code = getattr(e, 'status_code', None)
+            logger.error("Failed to send welcome email to %s. Status: %s, Details: %s", to_email, status_code, error_details)
+            logger.exception(e)
             return False
 
     @staticmethod
@@ -55,9 +59,10 @@ class EmailService:
         from_email = os.environ.get("SENDGRID_FROM_EMAIL", "noreply@whatsappcrm.com")
 
         # If no real API key is configured (dev mode), skip the real send.
-        # Never log the reset link itself, even in dev -- it's a live credential.
+        # In dev mode, we log the reset link so the developer can test the flow locally.
         if api_key == "dummy_dev_key":
             logger.info("[DEV MODE] Skipping real password reset email to %s (SENDGRID_API_KEY not configured).", to_email)
+            logger.info("[DEV MODE] Password Reset Link: %s", reset_link)
             return True
 
         message = Mail(
@@ -76,6 +81,9 @@ class EmailService:
             sg = SendGridAPIClient(api_key)
             sg.send(message)
             return True
-        except Exception:
-            logger.exception("Failed to send password reset email to %s", to_email)
+        except Exception as e:
+            error_details = getattr(e, 'body', None) or str(e)
+            status_code = getattr(e, 'status_code', None)
+            logger.error("Failed to send password reset email to %s. Status: %s, Details: %s", to_email, status_code, error_details)
+            logger.exception(e)
             return False

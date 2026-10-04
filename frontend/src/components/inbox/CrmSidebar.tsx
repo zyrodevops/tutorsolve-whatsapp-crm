@@ -398,7 +398,7 @@ export default function CrmSidebar({ conversation, currentUser, onAddNote, onSta
           <h4 className="text-xs font-bold text-[var(--color-text-muted)] uppercase tracking-wider mb-3">Assigned Agent</h4>
           
           <div className="relative">
-            {currentUser.role !== 'AGENT' ? (
+            {currentUser.role !== 'AGENT' && conversation.status !== 'RESOLVED' ? (
               <button 
                 onClick={() => setShowAssignDropdown(!showAssignDropdown)}
                 disabled={isAssigning}
@@ -415,7 +415,7 @@ export default function CrmSidebar({ conversation, currentUser, onAddNote, onSta
                 <ChevronDown size={16} className={`text-[var(--color-text-muted)] transition-transform ${showAssignDropdown ? 'rotate-180' : ''}`} />
               </button>
             ) : (
-              <div className="w-full flex items-center justify-between text-sm font-medium bg-[var(--color-bg-base)] p-3 rounded-xl border border-[var(--color-border-subtle)]">
+              <div className={`w-full flex items-center justify-between text-sm font-medium bg-[var(--color-bg-base)] p-3 rounded-xl border border-[var(--color-border-subtle)] ${conversation.status === 'RESOLVED' ? 'opacity-60 cursor-not-allowed' : ''}`}>
                 <div className="flex items-center gap-2">
                   <User size={16} className="text-[var(--color-text-muted)]" />
                   {conversation.assigned_agent_name ? (
@@ -427,7 +427,7 @@ export default function CrmSidebar({ conversation, currentUser, onAddNote, onSta
               </div>
             )}
 
-            {showAssignDropdown && currentUser.role !== 'AGENT' && (
+            {showAssignDropdown && currentUser.role !== 'AGENT' && conversation.status !== 'RESOLVED' && (
               <div className="absolute top-full left-0 right-0 mt-2 bg-white border border-[var(--color-border-subtle)] shadow-xl rounded-xl p-2 flex flex-col gap-1 z-50 max-h-48 overflow-y-auto">
                 <button 
                   onClick={() => {

@@ -181,7 +181,7 @@ def _make_conversation_with_messages(mock_db_client, customer_email_seed, messag
 def test_get_analytics_includes_avg_response_time(client, admin_token, mock_db_client):
     from datetime import datetime, timezone, timedelta
 
-    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime.now(timezone.utc)
     _make_conversation_with_messages(mock_db_client, "resp1", [
         ("CUSTOMER", "INBOUND", t0),
         ("AGENT", "OUTBOUND", t0 + timedelta(minutes=5)),
@@ -196,7 +196,7 @@ def test_get_analytics_includes_avg_response_time(client, admin_token, mock_db_c
 def test_get_analytics_averages_across_multiple_response_pairs(client, admin_token, mock_db_client):
     from datetime import datetime, timezone, timedelta
 
-    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime.now(timezone.utc)
     _make_conversation_with_messages(mock_db_client, "resp2", [
         ("CUSTOMER", "INBOUND", t0),
         ("AGENT", "OUTBOUND", t0 + timedelta(minutes=2)),   # 120s
@@ -214,7 +214,7 @@ def test_get_analytics_averages_across_multiple_response_pairs(client, admin_tok
 def test_get_analytics_response_time_null_when_no_agent_replies(client, admin_token, mock_db_client):
     from datetime import datetime, timezone
 
-    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime.now(timezone.utc)
     _make_conversation_with_messages(mock_db_client, "resp3", [
         ("CUSTOMER", "INBOUND", t0),
     ])
@@ -228,7 +228,7 @@ def test_get_analytics_response_time_null_when_no_agent_replies(client, admin_to
 def test_get_analytics_response_time_pools_across_conversations(client, admin_token, mock_db_client):
     from datetime import datetime, timezone, timedelta
 
-    t0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime.now(timezone.utc)
     _make_conversation_with_messages(mock_db_client, "resp4a", [
         ("CUSTOMER", "INBOUND", t0),
         ("AGENT", "OUTBOUND", t0 + timedelta(minutes=1)),  # 60s

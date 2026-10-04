@@ -24,6 +24,7 @@ export interface Message {
   delivery_status: string;
   timestamp: string;
   sender_name?: string | null;
+  preview?: string | null;
 }
 
 export interface NewMessagePayload {

@@ -264,7 +264,7 @@ def test_get_messages_includes_media_fields_for_documents(client, mock_db_client
     assert data[0]['media_url'] == "/api/media/DEMO_MEDIA_ID_001"
     assert data[0]['media_mime_type'] == "application/pdf"
 
-def test_get_messages_resets_unread_count(client, mock_db_client):
+def test_mark_read_resets_unread_count(client, mock_db_client):
     c = Customer(
         phone_hash=hash_phone("7778889999"),
         real_phone_number_encrypted=encrypt_phone("7778889999"),
@@ -279,7 +279,7 @@ def test_get_messages_resets_unread_count(client, mock_db_client):
     mock_db_client.collection("users").document(admin.id).set(admin.to_dict())
 
     client.post('/api/auth/login', json={"email": "admin@example.com", "password": "password"})
-    response = client.get(f'/api/conversations/{conv.id}/messages')
+    response = client.patch(f'/api/conversations/{conv.id}/mark-read')
     assert response.status_code == 200
 
     refreshed = mock_db_client.collection("conversations").document(conv.id).get().to_dict()

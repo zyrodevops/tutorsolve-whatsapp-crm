@@ -9,11 +9,12 @@ interface ChatListProps {
   onSelect: (id: string) => void;
   isSocketConnected?: boolean;
   isLoading?: boolean;
+  isFetchingMore?: boolean;
   hasMore?: boolean;
   fetchNextPage?: () => Promise<void>;
 }
 
-export default function ChatList({ conversations, selectedId, onSelect, isSocketConnected, isLoading, hasMore, fetchNextPage }: ChatListProps) {
+export default function ChatList({ conversations, selectedId, onSelect, isSocketConnected, isLoading, isFetchingMore, hasMore, fetchNextPage }: ChatListProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   const [activeTagFilter, setActiveTagFilter] = useState<string | null>(null);
@@ -243,9 +244,9 @@ export default function ChatList({ conversations, selectedId, onSelect, isSocket
             )}
 
             {/* Intersection Observer Target */}
-            {(hasMore || isLoading) && (
+            {(hasMore || isLoading || isFetchingMore) && (
               <div ref={observerTarget} className="py-4 flex justify-center">
-                {isLoading && (
+                {(isLoading || isFetchingMore) && (
                   <div className="animate-pulse flex space-x-2 items-center">
                     <div className="h-2 w-2 bg-emerald-400 rounded-full"></div>
                     <div className="h-2 w-2 bg-emerald-400 rounded-full"></div>

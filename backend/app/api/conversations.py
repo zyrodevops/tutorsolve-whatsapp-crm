@@ -66,7 +66,18 @@ def get_conversations():
             "profile_photo_url": cust.get("profile_photo_url")
         })
 
-    return jsonify({"status": "success", "data": conversations, "has_more": has_more}), 200
+    try:
+        total_unread_query = convs_ref.where("unread_count", ">", 0).count()
+        total_unread = total_unread_query.get()[0][0].value
+    except Exception:
+        total_unread = 0
+
+    return jsonify({
+        "status": "success", 
+        "data": conversations, 
+        "has_more": has_more,
+        "total_unread": total_unread
+    }), 200
 
 @bp.route('/<conversation_id>/messages', methods=['GET'])
 @require_role('ADMIN', 'MANAGER', 'AGENT')
@@ -80,8 +91,6 @@ def get_messages(conversation_id):
     msgs_ref = db.client.collection("messages").where("conversation_id", "==", conversation_id).order_by("timestamp", direction=Query.ASCENDING)
     messages = msgs_ref.stream()
 
-    if conv_data.get("unread_count", 0) > 0:
-        db.client.collection("conversations").document(conversation_id).update({"unread_count": 0})
 
     agent_name_cache: dict[str, str | None] = {}
 
@@ -112,6 +121,16 @@ def get_messages(conversation_id):
         })
 
     return jsonify({"status": "success", "data": msg_data}), 200
+
+@bp.route('/<conversation_id>/mark-read', methods=['PATCH'])
+@require_role('ADMIN', 'MANAGER', 'AGENT')
+def mark_read(conversation_id):
+    conv_doc = db.client.collection("conversations").document(conversation_id).get()
+    if not conv_doc.exists:
+        return jsonify({"status": "error", "message": "Conversation not found"}), 404
+
+    db.client.collection("conversations").document(conversation_id).update({"unread_count": 0})
+    return jsonify({"status": "success"}), 200
 
 @bp.route('/<conversation_id>/messages', methods=['POST'])
 @require_role('ADMIN', 'MANAGER', 'AGENT')
@@ -157,16 +176,7 @@ def send_message(conversation_id):
     if not success:
         return jsonify({"status": "error", "message": error}), 400
 
-    msg_docs = list(db.client.collection("messages")
-        .where("conversation_id", "==", conversation_id)
-        .where("direction", "==", "OUTBOUND")
-        .order_by("timestamp", direction=Query.DESCENDING)
-        .limit(1).stream())
-
-    if not msg_docs:
-        return jsonify({"status": "error", "message": "Message was sent but could not be retrieved"}), 500
-
-    msg = msg_docs[0].to_dict()
+    msg = success
     ts = msg.get("timestamp")
     
     return jsonify({
@@ -273,22 +283,25 @@ def assign_conversation(conversation_id):
     current_user_role = g.current_user.get("role")
     current_user_id = g.current_user.get("id")
 
-    if current_user_role == "AGENT":
-        # Agents can only assign to themselves (claim)
-        if assigned_agent_id != current_user_id:
-            return jsonify({"status": "error", "message": "Agents can only assign chats to themselves"}), 403
 
     if assigned_agent_id is not None:
         agent_doc = db.client.collection("users").document(assigned_agent_id).get()
         if not agent_doc.exists:
             return jsonify({"status": "error", "message": "Invalid agent ID"}), 400
-            
+
         target_role = agent_doc.to_dict().get("role")
-        if target_role not in ["AGENT", "MANAGER"]:
-            return jsonify({"status": "error", "message": "Cannot assign chat to this user role"}), 400
-            
-        if current_user_role == "MANAGER" and target_role != "AGENT":
-            return jsonify({"status": "error", "message": "Managers can only assign chats to agents"}), 403
+        is_self_claim = assigned_agent_id == current_user_id
+
+        # Self-claim: any role can assign a chat to themselves.
+        # Cross-assignment: enforce the role hierarchy.
+        if not is_self_claim:
+            if current_user_role == "AGENT":
+                # Agents may only self-claim; cross-assignment is not allowed.
+                return jsonify({"status": "error", "message": "Agents can only assign chats to themselves"}), 403
+            if current_user_role == "MANAGER" and target_role != "AGENT":
+                # Managers can only assign downward to Agents.
+                return jsonify({"status": "error", "message": "Managers can only assign chats to agents"}), 403
+            # Admins can assign to anyone — no additional restriction.
             
         agent_name = agent_doc.to_dict().get("full_name")
     else:
@@ -397,16 +410,7 @@ def send_template_message_endpoint(conversation_id):
     if not success:
         return jsonify({"status": "error", "message": f"Failed to send template: {err}"}), 400
 
-    msg_docs = list(db.client.collection("messages")
-        .where("conversation_id", "==", conversation_id)
-        .where("direction", "==", "OUTBOUND")
-        .order_by("timestamp", direction=Query.DESCENDING)
-        .limit(1).stream())
-
-    if not msg_docs:
-        return jsonify({"status": "error", "message": "Template sent but could not retrieve message"}), 500
-
-    msg = msg_docs[0].to_dict()
+    msg = success
     ts = msg.get("timestamp")
 
     return jsonify({

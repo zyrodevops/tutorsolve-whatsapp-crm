@@ -43,6 +43,15 @@ def proxy_media(media_id):
         status = getattr(e.response, "status_code", 500)
         body = getattr(e.response, "text", str(e))
         logger.warning("Failed to get media info from Meta (HTTP %s): %s", status, body)
+        
+        # Meta returns 400 with subcode 33 when media has expired (after 30 days)
+        if status == 400 and ("error_subcode" in body and "33" in body or "does not exist" in body):
+            expired_svg = """<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
+              <rect width="300" height="200" fill="#f87171"/>
+              <text x="150" y="100" font-family="sans-serif" font-size="16" fill="#ffffff" text-anchor="middle" dominant-baseline="middle">Media Expired</text>
+            </svg>"""
+            return Response(expired_svg, mimetype='image/svg+xml')
+            
         return jsonify({"status": "error", "message": "Failed to get media info from Meta"}), status
 
     # Step 2: Stream the binary data from Meta to the frontend

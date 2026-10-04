@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { MessageSquare, Send, AlertCircle, ChevronLeft, Paperclip, X, Zap } from 'lucide-react';
+import { MessageSquare, Send, AlertCircle, ChevronLeft, Paperclip, X, Zap, CheckCheck } from 'lucide-react';
 import { API_URL } from '@/lib/config';
 import Linkify from '@/components/ui/Linkify';
 import MessageStatusTicks from '@/components/inbox/MessageStatusTicks';
 import type { Message, NewMessagePayload, Conversation } from '@/types/inbox';
 import type { MessageStatusUpdatePayload } from '@/context/InboxContext';
+import { useInbox } from '@/context/InboxContext';
 
 interface MessageThreadProps {
   conversationId: string | null;
@@ -49,6 +50,7 @@ function isAllowedAttachmentType(mimeType: string): boolean {
 }
 
 export default function MessageThread({ conversationId, conversation, newMessage, messageStatusUpdate, onBack, isNoteMode: controlledNoteMode, onNoteModeChange }: MessageThreadProps) {
+  const { markAsRead } = useInbox();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -66,10 +68,11 @@ export default function MessageThread({ conversationId, conversation, newMessage
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isWindowClosed, setIsWindowClosed] = useState(false);
   const [timeRemainingLabel, setTimeRemainingLabel] = useState<string | null>(null);
-  const [quickReplies, setQuickReplies] = useState<{id: string, shortcut: string, message: string}[]>([]);
-  const [templates, setTemplates] = useState<{id: string, template_name: string, body?: string}[]>([]);
+  const [quickReplies, setQuickReplies] = useState<{ id: string, shortcut: string, message: string }[]>([]);
+  const [templates, setTemplates] = useState<{ id: string, template_name: string, body?: string }[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [templateParameters, setTemplateParameters] = useState<string[]>([]);
+  const [maximizedImage, setMaximizedImage] = useState<string | null>(null);
 
   useEffect(() => {
     const template = templates.find(t => t.template_name === selectedTemplate);
@@ -138,7 +141,7 @@ export default function MessageThread({ conversationId, conversation, newMessage
       setIsWindowClosed(msRemaining <= 0);
       setTimeRemainingLabel(msRemaining > 0 ? formatTimeRemaining(msRemaining) : null);
     };
-    
+
     checkExpiry();
     const interval = setInterval(checkExpiry, 60000); // Check every minute
     return () => clearInterval(interval);
@@ -253,13 +256,13 @@ export default function MessageThread({ conversationId, conversation, newMessage
     setIsSending(true);
     setSendError('');
 
-    const endpoint = isNoteMode 
+    const endpoint = isNoteMode
       ? `${API_URL}/api/conversations/${conversationId}/notes`
       : `${API_URL}/api/conversations/${conversationId}/messages`;
 
     const isMultipart = !!attachment && !isNoteMode;
     let bodyPayload: string | FormData;
-    
+
     if (isMultipart) {
       const formData = new FormData();
       formData.append('file', attachment);
@@ -309,7 +312,7 @@ export default function MessageThread({ conversationId, conversation, newMessage
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           template_name: selectedTemplate,
           template_parameters: templateParameters
         })
@@ -357,14 +360,34 @@ export default function MessageThread({ conversationId, conversation, newMessage
           </button>
         )}
         <h3 className="font-semibold text-[var(--color-text-primary)] text-lg">Message History</h3>
-        {timeRemainingLabel && (
-          <span
-            className="ml-auto text-xs font-medium text-[var(--color-text-muted)] bg-[var(--color-bg-base)] px-2.5 py-1 rounded-full flex-shrink-0"
-            title="Time remaining in the 24-hour WhatsApp reply window"
-          >
-            {timeRemainingLabel}
-          </span>
-        )}
+        <div className="mr-auto flex items-center gap-2">
+          {timeRemainingLabel && (
+            <span
+              className="text-xs font-medium text-[var(--color-text-muted)] bg-[var(--color-bg-base)] px-2.5 py-1 rounded-full flex-shrink-0"
+              title="Time remaining in the 24-hour WhatsApp reply window"
+            >
+              {timeRemainingLabel}
+            </span>
+          )}
+          {(conversation?.unread_count || 0) > 0 && (
+            <button
+              onClick={async () => {
+                try {
+                  await fetch(`${API_URL}/api/conversations/${conversationId}/mark-read`, {
+                    method: 'PATCH',
+                    credentials: 'include'
+                  });
+                  markAsRead(conversationId!);
+                } catch (e) {
+                  console.error(e);
+                }
+              }}
+              className="text-xs font-semibold bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full hover:bg-emerald-200 transition-colors flex items-center gap-1"
+            >
+              <CheckCheck size={14} /> Mark as read
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Thread */}
@@ -387,67 +410,71 @@ export default function MessageThread({ conversationId, conversation, newMessage
           ) : (
             <>
               {messages.map((msg, index) => {
-            const isAgentOrSystem = msg.sender_type === 'AGENT' || msg.sender_type === 'SYSTEM';
-            const isSystem = msg.sender_type === 'SYSTEM';
-            const msgDate = new Date(msg.timestamp);
-            const prevMsgDate = index > 0 ? new Date(messages[index - 1].timestamp) : null;
-            const showDateSeparator = !prevMsgDate || msgDate.toDateString() !== prevMsgDate.toDateString();
+                const isAgentOrSystem = msg.sender_type === 'AGENT' || msg.sender_type === 'SYSTEM';
+                const isSystem = msg.sender_type === 'SYSTEM';
+                const msgDate = new Date(msg.timestamp);
+                const prevMsgDate = index > 0 ? new Date(messages[index - 1].timestamp) : null;
+                const showDateSeparator = !prevMsgDate || msgDate.toDateString() !== prevMsgDate.toDateString();
 
-            const isNote = msg.sender_type === 'INTERNAL_NOTE';
+                const isNote = msg.sender_type === 'INTERNAL_NOTE';
 
-            return (
-              <React.Fragment key={msg.id}>
-                {showDateSeparator && (
-                  <div className="flex justify-center my-4">
-                    <span className="bg-[var(--color-bg-surface)] px-3 py-1 rounded-full border border-[var(--color-border-subtle)] shadow-sm text-xs font-semibold uppercase tracking-widest text-[var(--color-text-muted)]">
-                      {msgDate.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
-                    </span>
-                  </div>
-                )}
-                <div className={`flex ${isNote ? 'justify-center' : isAgentOrSystem ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[70%] rounded-xl px-4 py-3 shadow-sm ${
-                    isNote ? 'bg-yellow-100 border border-yellow-200 text-yellow-900' :
-                    isAgentOrSystem ? 'bg-[var(--color-brand-primary)] text-white rounded-br-none' : 'bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-bl-none'
-                  }`}>
-                    {isSystem && (
-                      <div className="flex items-center gap-1 text-[10px] uppercase font-bold text-emerald-200 mb-1 bg-black/10 w-fit px-2 py-0.5 rounded-full">
-                        <span>🤖 System Auto-Reply</span>
+                return (
+                  <React.Fragment key={msg.id}>
+                    {showDateSeparator && (
+                      <div className="flex justify-center my-4">
+                        <span className="bg-[var(--color-bg-surface)] px-3 py-1 rounded-full border border-[var(--color-border-subtle)] shadow-sm text-xs font-semibold uppercase tracking-widest text-[var(--color-text-muted)]">
+                          {msgDate.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}
+                        </span>
                       </div>
                     )}
-                    <p className={`text-sm whitespace-pre-wrap ${isNote ? 'italic' : ''}`}>
-                      {msg.text_body && <Linkify text={msg.text_body} isOnColoredBackground={isAgentOrSystem} />}
-                    </p>
-                    
-                    {msg.media_url && msg.message_type === 'IMAGE' && (
-                      <img src={`${API_URL}${msg.media_url}`} alt="Media" className="mt-2 rounded-lg max-w-full max-h-64 object-contain shadow-sm border border-black/5" />
-                    )}
-                    {msg.media_url && msg.message_type === 'VIDEO' && (
-                      <video src={`${API_URL}${msg.media_url}`} controls className="mt-2 rounded-lg max-w-full max-h-64 shadow-sm border border-black/5" />
-                    )}
-                    {msg.media_url && (msg.message_type === 'DOCUMENT' || msg.message_type === 'AUDIO' || msg.message_type === 'VOICE') && (
-                      <a href={`${API_URL}${msg.media_url}`} target="_blank" rel="noopener noreferrer" className={`mt-2 text-xs font-semibold underline flex items-center gap-1 p-2 rounded ${isAgentOrSystem ? 'bg-emerald-600/30 text-white' : 'bg-blue-50 text-blue-600'}`}>
-                        <Paperclip size={14} /> View Attachment
-                      </a>
-                    )}
+                    <div className={`flex ${isNote ? 'justify-center' : isAgentOrSystem ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[70%] rounded-xl px-4 py-3 shadow-sm ${isNote ? 'bg-yellow-100 border border-yellow-200 text-yellow-900' :
+                        isAgentOrSystem ? 'bg-[var(--color-brand-primary)] text-white rounded-br-none' : 'bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] text-[var(--color-text-primary)] rounded-bl-none'
+                        }`}>
+                        {isSystem && (
+                          <div className="flex items-center gap-1 text-[10px] uppercase font-bold text-emerald-200 mb-1 bg-black/10 w-fit px-2 py-0.5 rounded-full">
+                            <span>🤖 System Auto-Reply</span>
+                          </div>
+                        )}
+                        <p className={`text-sm whitespace-pre-wrap ${isNote ? 'italic' : ''}`}>
+                          {msg.text_body && <Linkify text={msg.text_body} isOnColoredBackground={isAgentOrSystem} />}
+                        </p>
 
-                    <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isNote ? 'text-yellow-600' : isAgentOrSystem ? 'text-emerald-100' : 'text-[var(--color-text-muted)]'}`}>
-                      {isNote && (
-                        <span className="mr-auto flex items-center gap-1 font-medium">
-                          <AlertCircle size={10} />
-                          Added by {msg.sender_name || 'System'}
-                        </span>
-                      )}
-                      {msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      {isAgentOrSystem && msg.direction === 'OUTBOUND' && (
-                        <MessageStatusTicks status={msg.delivery_status} />
-                      )}
+                        {msg.media_url && msg.message_type === 'IMAGE' && (
+                          <img 
+                            src={`${API_URL}${msg.media_url}`} 
+                            alt="Media" 
+                            className="mt-2 rounded-lg max-w-full max-h-64 object-contain shadow-sm border border-black/5 cursor-pointer hover:opacity-90 transition-opacity" 
+                            onClick={() => setMaximizedImage(`${API_URL}${msg.media_url}`)}
+                          />
+                        )}
+                        {msg.media_url && msg.message_type === 'VIDEO' && (
+                          <video src={`${API_URL}${msg.media_url}`} controls className="mt-2 rounded-lg max-w-full max-h-64 shadow-sm border border-black/5" />
+                        )}
+                        {msg.media_url && (msg.message_type === 'DOCUMENT' || msg.message_type === 'AUDIO' || msg.message_type === 'VOICE') && (
+                          <a href={`${API_URL}${msg.media_url}`} target="_blank" rel="noopener noreferrer" className={`mt-2 text-xs font-semibold underline flex items-center gap-1 p-2 rounded ${isAgentOrSystem ? 'bg-emerald-600/30 text-white' : 'bg-blue-50 text-blue-600'}`}>
+                            <Paperclip size={14} /> View Attachment
+                          </a>
+                        )}
+
+                        <div className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${isNote ? 'text-yellow-600' : isAgentOrSystem ? 'text-emerald-100' : 'text-[var(--color-text-muted)]'}`}>
+                          {isNote && (
+                            <span className="mr-auto flex items-center gap-1 font-medium">
+                              <AlertCircle size={10} />
+                              Added by {msg.sender_name || 'System'}
+                            </span>
+                          )}
+                          {msgDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {isAgentOrSystem && msg.direction === 'OUTBOUND' && (
+                            <MessageStatusTicks status={msg.delivery_status} />
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              </React.Fragment>
-            );
-          })}
-          <div ref={endOfMessagesRef} />
+                  </React.Fragment>
+                );
+              })}
+              <div ref={endOfMessagesRef} />
             </>
           )}
         </div>
@@ -461,7 +488,7 @@ export default function MessageThread({ conversationId, conversation, newMessage
             {sendError}
           </div>
         )}
-        
+
         {attachmentError && (
           <div className="mb-2 flex items-center gap-2 text-xs text-[var(--color-status-error)] bg-red-50 border border-red-200 rounded-lg px-3 py-2">
             <AlertCircle size={14} className="flex-shrink-0" />
@@ -503,7 +530,7 @@ export default function MessageThread({ conversationId, conversation, newMessage
         )}
 
         <div className="flex items-end gap-2">
-          
+
           <input
             type="file"
             ref={fileInputRef}
@@ -515,7 +542,7 @@ export default function MessageThread({ conversationId, conversation, newMessage
 
           {/* Input Pill */}
           <div className={`flex-1 flex items-end bg-[var(--color-bg-base)] border border-[var(--color-border-subtle)] rounded-3xl overflow-hidden focus-within:ring-2 focus-within:ring-emerald-100 focus-within:border-emerald-400 transition-all shadow-sm min-w-0 ${isNoteMode ? 'bg-yellow-50 border-yellow-200 focus-within:border-yellow-400 focus-within:ring-yellow-100' : ''}`}>
-            
+
             <button
               onClick={() => setIsNoteMode(!isNoteMode)}
               className={`p-2.5 sm:p-3 shrink-0 transition-colors ${isNoteMode ? 'text-yellow-600 hover:bg-yellow-100' : 'text-[var(--color-text-secondary)] hover:bg-gray-100'}`}
@@ -546,11 +573,11 @@ export default function MessageThread({ conversationId, conversation, newMessage
                   <div className="flex flex-col gap-1.5 px-2 pb-1">
                     {templateParameters.map((val, idx) => (
                       <div key={idx} className="flex items-center gap-2">
-                        <span className="text-xs text-[var(--color-text-muted)] w-8 font-mono">{`{{${idx+1}}}`}</span>
+                        <span className="text-xs text-[var(--color-text-muted)] w-8 font-mono">{`{{${idx + 1}}}`}</span>
                         <input
                           type="text"
                           className="flex-1 bg-[var(--color-bg-surface)] border border-[var(--color-border-subtle)] rounded px-2 py-1 text-xs focus:outline-none focus:border-emerald-400"
-                          placeholder={`Variable ${idx+1}`}
+                          placeholder={`Variable ${idx + 1}`}
                           value={val}
                           onChange={(e) => {
                             const newParams = [...templateParameters];
@@ -608,6 +635,27 @@ export default function MessageThread({ conversationId, conversation, newMessage
           </button>
         </div>
       </div>
+
+      {/* Maximized Image Modal */}
+      {maximizedImage && (
+        <div 
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          onClick={() => setMaximizedImage(null)}
+        >
+          <button 
+            className="absolute top-4 right-4 text-white hover:bg-white/20 p-2 rounded-full transition-colors"
+            onClick={(e) => { e.stopPropagation(); setMaximizedImage(null); }}
+          >
+            <X size={24} />
+          </button>
+          <img 
+            src={maximizedImage} 
+            alt="Maximized Media" 
+            className="max-w-full max-h-full object-contain select-none shadow-2xl rounded"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -1,0 +1,36 @@
+# Environments
+.env
+.venv
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+instance/
+
+# Node
+node_modules/
+dist/
+build/
+.npm/
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Project specific
+backend/instance/
+frontend/scratch/
+backend/test_*.py
+backend/check_firestore.py
+backend/tests/__pycache__/
+frontend/.next/
